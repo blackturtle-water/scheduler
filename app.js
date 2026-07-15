@@ -44,6 +44,15 @@ function initApp() {
 function loadDataFromStorage() {
     try {
         state.events = JSON.parse(localStorage.getItem(STORAGE_KEYS.EVENTS)) || [];
+        // Migration: convert single 'date' events to multi-day style 'startDate'/'endDate'
+        state.events = state.events.map(evt => {
+            if (evt.date && !evt.startDate) {
+                evt.startDate = evt.date;
+                evt.endDate = evt.date;
+                delete evt.date;
+            }
+            return evt;
+        });
         state.todos = JSON.parse(localStorage.getItem(STORAGE_KEYS.TODOS)) || [];
         state.notes = JSON.parse(localStorage.getItem(STORAGE_KEYS.NOTES)) || [];
         state.ddays = JSON.parse(localStorage.getItem(STORAGE_KEYS.DDAYS)) || [];
@@ -351,7 +360,11 @@ function renderTodayEvents() {
     listEl.innerHTML = '';
     
     const todayStr = getLocalDateString(new Date());
-    const todayEvents = state.events.filter(e => e.date === todayStr);
+    const todayEvents = state.events.filter(e => {
+        const start = e.startDate;
+        const end = e.endDate || e.startDate;
+        return todayStr >= start && todayStr <= end;
+    });
     
     if (todayEvents.length === 0) {
         listEl.innerHTML = '<div class="no-data">오늘 등록된 일정이 없습니다.</div>';
@@ -443,26 +456,44 @@ function initCalendar() {
     });
     
     const eventForm = document.getElementById('event-form');
+    
+    // Auto-align end date when start date changes
+    const startDateInput = document.getElementById('event-start-date');
+    const endDateInput = document.getElementById('event-end-date');
+    
+    startDateInput.addEventListener('change', () => {
+        if (!endDateInput.value || endDateInput.value < startDateInput.value) {
+            endDateInput.value = startDateInput.value;
+        }
+    });
+
     eventForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const id = document.getElementById('event-id').value;
         const title = document.getElementById('event-title').value.trim();
-        const date = document.getElementById('event-date').value;
+        const startDate = startDateInput.value;
+        const endDate = endDateInput.value;
         const color = document.getElementById('event-color').value;
         const desc = document.getElementById('event-desc').value.trim();
+        
+        if (startDate > endDate) {
+            alert('종료일은 시작일보다 빠를 수 없습니다.');
+            return;
+        }
         
         if (id) {
             // Edit existing
             const idx = state.events.findIndex(evt => evt.id === id);
             if (idx !== -1) {
-                state.events[idx] = { id, title, date, color, desc };
+                state.events[idx] = { id, title, startDate, endDate, color, desc };
             }
         } else {
             // Add new
             state.events.push({
                 id: 'evt_' + Date.now(),
                 title,
-                date,
+                startDate,
+                endDate,
                 color,
                 desc
             });
@@ -560,8 +591,12 @@ function renderCalendar() {
             <div class="cell-events"></div>
         `;
         
-        // Find events for this cell date
-        const cellEvents = state.events.filter(e => e.date === cell.dateStr);
+        // Find events for this cell date (multi-day matching)
+        const cellEvents = state.events.filter(e => {
+            const start = e.startDate;
+            const end = e.endDate || e.startDate;
+            return cell.dateStr >= start && cell.dateStr <= end;
+        });
         const eventsContainer = cellEl.querySelector('.cell-events');
         
         cellEvents.forEach(evt => {
@@ -601,7 +636,8 @@ function openEventModal(eventObj = null, defaultDateStr = null) {
         titleHeader.textContent = '일정 수정';
         document.getElementById('event-id').value = eventObj.id;
         document.getElementById('event-title').value = eventObj.title;
-        document.getElementById('event-date').value = eventObj.date;
+        document.getElementById('event-start-date').value = eventObj.startDate;
+        document.getElementById('event-end-date').value = eventObj.endDate || eventObj.startDate;
         document.getElementById('event-color').value = eventObj.color || '#3498db';
         document.getElementById('event-desc').value = eventObj.desc || '';
         deleteBtn.classList.remove('hidden');
@@ -609,7 +645,9 @@ function openEventModal(eventObj = null, defaultDateStr = null) {
         // Add mode
         titleHeader.textContent = '새 일정 추가';
         document.getElementById('event-id').value = '';
-        document.getElementById('event-date').value = defaultDateStr || getLocalDateString(new Date());
+        const todayOrSelected = defaultDateStr || getLocalDateString(new Date());
+        document.getElementById('event-start-date').value = todayOrSelected;
+        document.getElementById('event-end-date').value = todayOrSelected;
         document.getElementById('event-color').value = '#3498db';
         deleteBtn.classList.add('hidden');
     }
