@@ -1446,3 +1446,313 @@ document.addEventListener('DOMContentLoaded', () => {
         updateSyncIndicator();
     }, 300);
 });
+
+
+// ======================================================
+// EXISTING SITE FINAL PATCH: calendar time fields, 5-minute step
+// ======================================================
+(function () {
+    function migrateEventTimeFields(evt) {
+        if (!evt) return evt;
+        if (evt.date && !evt.startDate) {
+            evt.startDate = evt.date;
+            evt.endDate = evt.date;
+            delete evt.date;
+        }
+        if (!evt.endDate) evt.endDate = evt.startDate;
+        if (!evt.startTime) evt.startTime = '';
+        if (!evt.endTime) evt.endTime = '';
+        return evt;
+    }
+
+    function ensureEventTimeFields() {
+        if (document.getElementById('event-start-time')) return;
+        const startDateInput = document.getElementById('event-start-date');
+        const endDateInput = document.getElementById('event-end-date');
+        if (!startDateInput || !endDateInput) return;
+
+        const dateRow = startDateInput.closest('.form-row');
+        if (!dateRow) return;
+
+        const timeRow = document.createElement('div');
+        timeRow.className = 'form-row';
+        timeRow.innerHTML = `
+            <div class="form-group">
+                <label for="event-start-time">시작시간</label>
+                <input type="time" id="event-start-time" step="300">
+            </div>
+            <div class="form-group">
+                <label for="event-end-time">종료시간</label>
+                <input type="time" id="event-end-time" step="300">
+            </div>
+        `;
+        dateRow.insertAdjacentElement('afterend', timeRow);
+    }
+
+    function formatEventTime(evt) {
+        if (evt.startTime && evt.endTime) return `${evt.startTime}~${evt.endTime} `;
+        if (evt.startTime) return `${evt.startTime} `;
+        return '';
+    }
+
+    function isDateInRange(dateStr, startDate, endDate) {
+        if (!startDate) return false;
+        const end = endDate || startDate;
+        return dateStr >= startDate && dateStr <= end;
+    }
+
+    window.loadDataFromStorage = loadDataFromStorage = function () {
+        try {
+            state.events = JSON.parse(localStorage.getItem(STORAGE_KEYS.EVENTS)) || [];
+            state.events = state.events.map(migrateEventTimeFields);
+            state.todos = JSON.parse(localStorage.getItem(STORAGE_KEYS.TODOS)) || [];
+            state.notes = JSON.parse(localStorage.getItem(STORAGE_KEYS.NOTES)) || [];
+            state.ddays = JSON.parse(localStorage.getItem(STORAGE_KEYS.DDAYS)) || [];
+        } catch (e) {
+            console.error('로컬 데이터를 불러오는 중 오류 발생:', e);
+        }
+    };
+
+    window.saveDataToStorage = saveDataToStorage = function () {
+        localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(state.events.map(migrateEventTimeFields)));
+        localStorage.setItem(STORAGE_KEYS.TODOS, JSON.stringify(state.todos));
+        localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(state.notes));
+        localStorage.setItem(STORAGE_KEYS.DDAYS, JSON.stringify(state.ddays));
+
+        if (typeof AutoSync !== 'undefined' && typeof AutoSync.scheduleUpload === 'function') {
+            AutoSync.scheduleUpload(getFullAppState());
+        }
+    };
+
+    window.restoreFullAppState = restoreFullAppState = function (data) {
+        if (!data) return;
+        if (Array.isArray(data.events)) state.events = data.events.map(migrateEventTimeFields);
+        if (Array.isArray(data.todos)) state.todos = data.todos;
+        if (Array.isArray(data.notes)) state.notes = data.notes;
+        if (Array.isArray(data.ddays)) state.ddays = data.ddays;
+
+        localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(state.events));
+        localStorage.setItem(STORAGE_KEYS.TODOS, JSON.stringify(state.todos));
+        localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(state.notes));
+        localStorage.setItem(STORAGE_KEYS.DDAYS, JSON.stringify(state.ddays));
+
+        if (typeof renderDashboard === 'function') renderDashboard();
+        if (typeof renderCalendar === 'function') renderCalendar();
+        if (typeof renderTodoList === 'function') renderTodoList();
+        if (typeof renderNotesList === 'function') renderNotesList();
+    };
+
+    window.initCalendar = initCalendar = function () {
+        ensureEventTimeFields();
+
+        document.getElementById('cal-prev-month')?.addEventListener('click', () => {
+            state.currentDate.setMonth(state.currentDate.getMonth() - 1);
+            renderCalendar();
+        });
+        document.getElementById('cal-next-month')?.addEventListener('click', () => {
+            state.currentDate.setMonth(state.currentDate.getMonth() + 1);
+            renderCalendar();
+        });
+        document.getElementById('cal-today')?.addEventListener('click', () => {
+            state.currentDate = new Date();
+            renderCalendar();
+        });
+        document.getElementById('btn-add-event')?.addEventListener('click', () => {
+            openEventModal(null, getLocalDateString(new Date()));
+        });
+
+        const startDateInput = document.getElementById('event-start-date');
+        const endDateInput = document.getElementById('event-end-date');
+        startDateInput?.addEventListener('change', () => {
+            if (!endDateInput.value || endDateInput.value < startDateInput.value) {
+                endDateInput.value = startDateInput.value;
+            }
+        });
+
+        const eventForm = document.getElementById('event-form');
+        eventForm?.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const id = document.getElementById('event-id').value;
+            const title = document.getElementById('event-title').value.trim();
+            const startDate = document.getElementById('event-start-date').value;
+            const endDate = document.getElementById('event-end-date').value;
+            const startTime = document.getElementById('event-start-time')?.value || '';
+            const endTime = document.getElementById('event-end-time')?.value || '';
+            const color = document.getElementById('event-color').value;
+            const desc = document.getElementById('event-desc').value.trim();
+
+            if (!title) {
+                alert('일정 제목을 입력해주세요.');
+                return;
+            }
+            if (startDate > endDate) {
+                alert('종료일은 시작일보다 빠를 수 없습니다.');
+                return;
+            }
+            if (startDate === endDate && startTime && endTime && endTime < startTime) {
+                alert('같은 날짜에서는 종료시간이 시작시간보다 빠를 수 없습니다.');
+                return;
+            }
+
+            const eventData = { id: id || 'evt_' + Date.now(), title, startDate, endDate, startTime, endTime, color, desc };
+            if (id) {
+                const idx = state.events.findIndex(evt => evt.id === id);
+                if (idx !== -1) state.events[idx] = eventData;
+            } else {
+                state.events.push(eventData);
+            }
+
+            saveDataToStorage();
+            if (typeof renderDashboard === 'function') renderDashboard();
+            renderCalendar();
+            closeModal(document.getElementById('modal-event'));
+        });
+
+        document.getElementById('btn-delete-event')?.addEventListener('click', () => {
+            const id = document.getElementById('event-id').value;
+            if (!id) return;
+            if (!confirm('일정을 삭제하시겠습니까?')) return;
+            state.events = state.events.filter(evt => evt.id !== id);
+            saveDataToStorage();
+            if (typeof renderDashboard === 'function') renderDashboard();
+            renderCalendar();
+            closeModal(document.getElementById('modal-event'));
+        });
+
+        document.getElementById('btn-cancel-event')?.addEventListener('click', () => {
+            closeModal(document.getElementById('modal-event'));
+        });
+
+        renderCalendar();
+    };
+
+    window.renderCalendar = renderCalendar = function () {
+        const year = state.currentDate.getFullYear();
+        const month = state.currentDate.getMonth();
+        const monthYearEl = document.getElementById('calendar-month-year');
+        const grid = document.getElementById('calendar-grid');
+        if (monthYearEl) monthYearEl.textContent = `${year}년 ${month + 1}월`;
+        if (!grid) return;
+        grid.innerHTML = '';
+
+        const firstDayIndex = new Date(year, month, 1).getDay();
+        const lastDay = new Date(year, month + 1, 0).getDate();
+        const prevLastDay = new Date(year, month, 0).getDate();
+        const cells = [];
+
+        for (let x = firstDayIndex; x > 0; x--) {
+            const day = prevLastDay - x + 1;
+            const tempDate = new Date(year, month - 1, day);
+            cells.push({ day, dateStr: getLocalDateString(tempDate), isOtherMonth: true });
+        }
+        for (let i = 1; i <= lastDay; i++) {
+            const tempDate = new Date(year, month, i);
+            cells.push({ day: i, dateStr: getLocalDateString(tempDate), isOtherMonth: false });
+        }
+        const remainingCells = 42 - cells.length;
+        for (let j = 1; j <= remainingCells; j++) {
+            const tempDate = new Date(year, month + 1, j);
+            cells.push({ day: j, dateStr: getLocalDateString(tempDate), isOtherMonth: true });
+        }
+
+        const todayStr = getLocalDateString(new Date());
+        state.events = state.events.map(migrateEventTimeFields);
+
+        cells.forEach(cell => {
+            const cellEl = document.createElement('div');
+            cellEl.className = 'calendar-cell';
+            if (cell.isOtherMonth) cellEl.classList.add('other-month');
+            if (cell.dateStr === todayStr) cellEl.classList.add('today');
+            cellEl.innerHTML = `<span class="cell-num">${cell.day}</span><div class="cell-events"></div>`;
+
+            const eventsContainer = cellEl.querySelector('.cell-events');
+            const cellEvents = state.events
+                .filter(evt => isDateInRange(cell.dateStr, evt.startDate, evt.endDate))
+                .sort((a, b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99'));
+
+            cellEvents.forEach(evt => {
+                const badge = document.createElement('div');
+                badge.className = 'event-badge';
+                badge.style.backgroundColor = evt.color || 'var(--color-primary)';
+                badge.textContent = `${formatEventTime(evt)}${evt.title}`;
+                badge.title = `${formatEventTime(evt)}${evt.title}`;
+                badge.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openEventModal(evt);
+                });
+                eventsContainer.appendChild(badge);
+            });
+
+            cellEl.addEventListener('click', () => openEventModal(null, cell.dateStr));
+            grid.appendChild(cellEl);
+        });
+    };
+
+    window.renderTodayEvents = renderTodayEvents = function () {
+        const listEl = document.getElementById('dashboard-today-events');
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        const today = getLocalDateString(new Date());
+        state.events = state.events.map(migrateEventTimeFields);
+        const todayEvents = state.events
+            .filter(evt => isDateInRange(today, evt.startDate, evt.endDate))
+            .sort((a, b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99'));
+
+        if (!todayEvents.length) {
+            listEl.innerHTML = '<div class="no-data">오늘 일정이 없습니다.</div>';
+            return;
+        }
+
+        todayEvents.forEach(evt => {
+            const item = document.createElement('div');
+            item.className = 'today-event-item';
+            item.style.borderLeftColor = evt.color || 'var(--color-primary)';
+            item.innerHTML = `
+                <div>
+                    <div class="today-event-title">${escapeHTML(formatEventTime(evt) + (evt.title || ''))}</div>
+                    <div class="today-event-desc">${escapeHTML(evt.desc || '')}</div>
+                </div>
+            `;
+            listEl.appendChild(item);
+        });
+    };
+
+    window.openEventModal = openEventModal = function (eventObj = null, defaultDateStr = null) {
+        ensureEventTimeFields();
+        const modal = document.getElementById('modal-event');
+        const form = document.getElementById('event-form');
+        const deleteBtn = document.getElementById('btn-delete-event');
+        const titleHeader = document.getElementById('modal-event-title');
+        if (form) form.reset();
+
+        const selectedDate = defaultDateStr || getLocalDateString(new Date());
+
+        if (eventObj) {
+            eventObj = migrateEventTimeFields(eventObj);
+            if (titleHeader) titleHeader.textContent = '일정 수정';
+            document.getElementById('event-id').value = eventObj.id;
+            document.getElementById('event-title').value = eventObj.title || '';
+            document.getElementById('event-start-date').value = eventObj.startDate || selectedDate;
+            document.getElementById('event-end-date').value = eventObj.endDate || eventObj.startDate || selectedDate;
+            document.getElementById('event-start-time').value = eventObj.startTime || '';
+            document.getElementById('event-end-time').value = eventObj.endTime || '';
+            document.getElementById('event-color').value = eventObj.color || '#3498db';
+            document.getElementById('event-desc').value = eventObj.desc || '';
+            deleteBtn?.classList.remove('hidden');
+        } else {
+            if (titleHeader) titleHeader.textContent = '새 일정 추가';
+            document.getElementById('event-id').value = '';
+            document.getElementById('event-start-date').value = selectedDate;
+            document.getElementById('event-end-date').value = selectedDate;
+            document.getElementById('event-start-time').value = '';
+            document.getElementById('event-end-time').value = '';
+            document.getElementById('event-color').value = '#3498db';
+            deleteBtn?.classList.add('hidden');
+        }
+        openModal(modal);
+    };
+
+    document.addEventListener('DOMContentLoaded', () => {
+        setTimeout(() => ensureEventTimeFields(), 200);
+    });
+})();
