@@ -1,7 +1,8 @@
 /**
- * GitHub Gist Sync Module
- * Firebase 없이 GitHub Secret Gist를 이용한 PC/모바일 동기화 모듈입니다.
- * 주의: PAT는 코드에 직접 넣지 말고 설정 화면에서만 입력하세요.
+ * GitHub Gist Sync Module - robust PC/mobile version
+ * - Uses GitHub Secret Gist as cloud storage
+ * - Supports old/new data file names for compatibility
+ * - PAT is stored only in browser localStorage via settings screen
  */
 
 const GithubSync = {
@@ -12,6 +13,7 @@ const GithubSync = {
     },
 
     FILE_NAME: 'scheduler-data.json',
+    LEGACY_FILE_NAMES: ['scheduler-data.json', 'g-scheduler-data.json'],
     GIST_DESCRIPTION: 'G-Scheduler Sync Data',
 
     getSettings() {
@@ -42,25 +44,51 @@ const GithubSync = {
         };
     },
 
-    async findExistingGist(pat) {
-        const response = await fetch('https://api.github.com/gists', {
-            method: 'GET',
-            headers: this.getHeaders(pat)
+    async _request(url, options = {}) {
+        const settings = this.getSettings();
+        if (!settings.pat) throw new Error('GitHub PAT가 설정되지 않았습니다.');
+
+        const response = await fetch(url, {
+            ...options,
+            headers: {
+                ...this.getHeaders(settings.pat),
+                ...(options.headers || {})
+            }
         });
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.message || `GitHub API 오류: ${response.status}`);
+            const msg = errorData.message || `${response.status} ${response.statusText}`;
+            if (response.status === 401) throw new Error('401 인증 실패: PAT가 틀렸거나 만료되었습니다.');
+            if (response.status === 403) throw new Error('403 권한 오류: PAT에 gist 권한이 있는지 확인하세요.');
+            if (response.status === 404) throw new Error('404 Gist 오류: Gist ID가 틀렸거나 토큰이 해당 Gist에 접근할 수 없습니다.');
+            throw new Error(`GitHub API 오류: ${msg}`);
         }
 
-        const gists = await response.json();
+        return await response.json();
+    },
+
+    _findDataFile(files) {
+        if (!files) return null;
+        for (const name of this.LEGACY_FILE_NAMES) {
+            if (files[name]) return files[name];
+        }
+        return null;
+    },
+
+    async findExistingGist() {
+        const gists = await this._request('https://api.github.com/gists', { method: 'GET' });
         const found = gists.find(gist => {
-            const hasFile = gist.files && gist.files[this.FILE_NAME];
+            const hasKnownFile = gist.files && this.LEGACY_FILE_NAMES.some(name => gist.files[name]);
             const sameDesc = gist.description === this.GIST_DESCRIPTION;
-            return hasFile || sameDesc;
+            return hasKnownFile || sameDesc;
         });
 
-        return found ? found.id : '';
+        if (found) {
+            localStorage.setItem(this.KEYS.GIST_ID, found.id);
+            return found.id;
+        }
+        return '';
     },
 
     async uploadData(data) {
@@ -68,77 +96,53 @@ const GithubSync = {
         if (!settings.pat) throw new Error('GitHub PAT가 설정되지 않았습니다.');
 
         let gistId = settings.gistId;
-        if (!gistId) {
-            gistId = await this.findExistingGist(settings.pat);
-            if (gistId) localStorage.setItem(this.KEYS.GIST_ID, gistId);
-        }
+        if (!gistId) gistId = await this.findExistingGist();
 
-        const content = JSON.stringify(data, null, 2);
         const body = {
             description: this.GIST_DESCRIPTION,
             public: false,
             files: {
-                [this.FILE_NAME]: { content }
+                [this.FILE_NAME]: {
+                    content: JSON.stringify({
+                        app: 'G-Scheduler',
+                        updatedAt: new Date().toISOString(),
+                        data
+                    }, null, 2)
+                }
             }
         };
 
-        const url = gistId
-            ? `https://api.github.com/gists/${gistId}`
-            : 'https://api.github.com/gists';
+        const url = gistId ? `https://api.github.com/gists/${gistId}` : 'https://api.github.com/gists';
+        const method = gistId ? 'PATCH' : 'POST';
+        const result = await this._request(url, { method, body: JSON.stringify(body) });
 
-        const response = await fetch(url, {
-            method: gistId ? 'PATCH' : 'POST',
-            headers: this.getHeaders(settings.pat),
-            body: JSON.stringify(body)
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.message || `GitHub API 오류: ${response.status}`);
-        }
-
-        const responseData = await response.json();
-        localStorage.setItem(this.KEYS.GIST_ID, responseData.id);
+        localStorage.setItem(this.KEYS.GIST_ID, result.id);
         const now = new Date().toISOString();
         localStorage.setItem(this.KEYS.LAST_SYNC, now);
-
-        return { success: true, gistId: responseData.id, updatedAt: now };
+        return { success: true, gistId: result.id, updatedAt: now };
     },
 
     async downloadData() {
-        const settings = this.getSettings();
+        let settings = this.getSettings();
         if (!settings.pat) throw new Error('GitHub PAT가 설정되지 않았습니다.');
 
         let gistId = settings.gistId;
-        if (!gistId) {
-            gistId = await this.findExistingGist(settings.pat);
-            if (!gistId) {
-                return { success: false, data: null, message: '기존 Gist가 없습니다.' };
-            }
-            localStorage.setItem(this.KEYS.GIST_ID, gistId);
-        }
+        if (!gistId) gistId = await this.findExistingGist();
+        if (!gistId) return { success: false, data: null, message: '동기화용 Gist가 없습니다.' };
 
-        const response = await fetch(`https://api.github.com/gists/${gistId}`, {
-            method: 'GET',
-            headers: this.getHeaders(settings.pat)
-        });
+        const gist = await this._request(`https://api.github.com/gists/${gistId}`, { method: 'GET' });
+        localStorage.setItem(this.KEYS.GIST_ID, gist.id);
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.message || `GitHub API 오류: ${response.status}`);
-        }
+        const file = this._findDataFile(gist.files);
+        if (!file || !file.content) return { success: false, data: null, message: 'Gist에 데이터 파일이 없습니다.' };
 
-        const responseData = await response.json();
-        const file = responseData.files && responseData.files[this.FILE_NAME];
-        if (!file || !file.content) {
-            return { success: false, data: null, message: 'Gist에 데이터 파일이 없습니다.' };
-        }
+        let parsed = JSON.parse(file.content);
+        const data = parsed && parsed.data ? parsed.data : parsed;
+        const remoteUpdatedAt = parsed && parsed.updatedAt ? parsed.updatedAt : (gist.updated_at || '');
 
-        const data = JSON.parse(file.content);
         const now = new Date().toISOString();
         localStorage.setItem(this.KEYS.LAST_SYNC, now);
-
-        return { success: true, data, updatedAt: now };
+        return { success: true, data, updatedAt: now, remoteUpdatedAt, gistId: gist.id };
     }
 };
 
@@ -147,30 +151,20 @@ const AutoSync = {
     _debounceMs: 2000,
     _isSyncing: false,
 
-    async initAutoSync(onDataRestored) {
-        if (!GithubSync.isConfigured()) return;
-        try {
-            const result = await GithubSync.downloadData();
-            if (result.success && result.data && typeof onDataRestored === 'function') {
-                onDataRestored(result.data);
-            }
-        } catch (e) {
-            console.warn('[AutoSync] 자동 다운로드 실패:', e.message);
-        }
-    },
-
     scheduleUpload(data) {
         if (!GithubSync.isConfigured()) return;
         if (this._uploadTimer) clearTimeout(this._uploadTimer);
-
         this._uploadTimer = setTimeout(async () => {
             if (this._isSyncing) return;
             this._isSyncing = true;
             try {
+                setMobileSyncStatus('자동 업로드 중...', 'syncing');
                 await GithubSync.uploadData(data);
+                setMobileSyncStatus('자동 업로드 완료', 'online');
                 if (typeof updateSyncIndicator === 'function') updateSyncIndicator();
                 if (typeof renderSyncLogBox === 'function') renderSyncLogBox();
             } catch (e) {
+                setMobileSyncStatus(`자동 업로드 실패: ${e.message}`, 'error');
                 console.warn('[AutoSync] 자동 업로드 실패:', e.message);
             } finally {
                 this._isSyncing = false;

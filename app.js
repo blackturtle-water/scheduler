@@ -1179,45 +1179,101 @@ function escapeHTML(str) {
 }
 
 // ======================================================
-// FINAL PATCH: Calendar time fields + 5-minute step + safe auto sync
+// FINAL SYNC PATCH: mobile status + safer download/upload sync
 // ======================================================
 
-const __originalRenderDashboardFinal = typeof renderDashboard === 'function' ? renderDashboard : null;
-const __originalRenderTodoListFinal = typeof renderTodoList === 'function' ? renderTodoList : null;
-const __originalRenderNotesListFinal = typeof renderNotesList === 'function' ? renderNotesList : null;
-
-function migrateEventTimeFields(evt) {
-    if (!evt) return evt;
-    if (evt.date && !evt.startDate) {
-        evt.startDate = evt.date;
-        evt.endDate = evt.date;
-        delete evt.date;
-    }
-    if (!evt.endDate) evt.endDate = evt.startDate;
-    if (!evt.startTime) evt.startTime = '';
-    if (!evt.endTime) evt.endTime = '';
-    return evt;
+function countAppData(data) {
+    if (!data) return 0;
+    return (Array.isArray(data.events) ? data.events.length : 0)
+        + (Array.isArray(data.todos) ? data.todos.length : 0)
+        + (Array.isArray(data.notes) ? data.notes.length : 0)
+        + (Array.isArray(data.ddays) ? data.ddays.length : 0);
 }
 
+function ensureMobileSyncStatusBox() {
+    let box = document.getElementById('mobile-sync-status-box');
+    if (box) return box;
+
+    box = document.createElement('div');
+    box.id = 'mobile-sync-status-box';
+    box.style.cssText = `
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        z-index: 3000;
+        display: none;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(17, 14, 36, 0.96);
+        border: 1px solid rgba(255,255,255,0.12);
+        color: #fff;
+        font-size: 12px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+        backdrop-filter: blur(10px);
+    `;
+    box.innerHTML = `
+        <span id="mobile-sync-status-text">로컬 모드</span>
+        <button type="button" id="mobile-sync-status-button" style="
+            border: 0;
+            border-radius: 9px;
+            padding: 7px 10px;
+            background: #34d399;
+            color: #06120d;
+            font-weight: 700;
+            font-size: 12px;
+        ">동기화</button>
+    `;
+    document.body.appendChild(box);
+
+    const btn = document.getElementById('mobile-sync-status-button');
+    btn.addEventListener('click', async () => {
+        if (typeof executeGitHubSync === 'function') await executeGitHubSync();
+    });
+
+    return box;
+}
+
+function setMobileSyncStatus(message, mode = 'offline') {
+    const box = ensureMobileSyncStatusBox();
+    const text = document.getElementById('mobile-sync-status-text');
+    if (!box || !text) return;
+
+    box.style.display = 'flex';
+    text.textContent = message;
+
+    const colors = {
+        online: 'rgba(52, 211, 153, 0.20)',
+        syncing: 'rgba(251, 191, 36, 0.22)',
+        offline: 'rgba(255,255,255,0.06)',
+        error: 'rgba(248, 113, 113, 0.24)'
+    };
+    box.style.background = colors[mode] || colors.offline;
+}
+
+const __oldSaveDataToStorageSyncPatch = saveDataToStorage;
 function saveDataToStorage() {
     localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(state.events));
     localStorage.setItem(STORAGE_KEYS.TODOS, JSON.stringify(state.todos));
     localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(state.notes));
     localStorage.setItem(STORAGE_KEYS.DDAYS, JSON.stringify(state.ddays));
 
-    if (__originalRenderDashboardFinal) __originalRenderDashboardFinal();
-    renderCalendar();
-    if (__originalRenderTodoListFinal) __originalRenderTodoListFinal();
-    if (__originalRenderNotesListFinal) __originalRenderNotesListFinal();
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (typeof renderCalendar === 'function') renderCalendar();
+    if (typeof renderTodoList === 'function') renderTodoList();
+    if (typeof renderNotesList === 'function') renderNotesList();
 
-    if (typeof AutoSync !== 'undefined') {
+    if (typeof AutoSync !== 'undefined' && typeof AutoSync.scheduleUpload === 'function') {
         AutoSync.scheduleUpload(getFullAppState());
     }
 }
 
 function restoreFullAppState(data) {
     if (!data) return;
-    if (Array.isArray(data.events)) state.events = data.events.map(migrateEventTimeFields);
+    if (Array.isArray(data.events)) state.events = data.events;
     if (Array.isArray(data.todos)) state.todos = data.todos;
     if (Array.isArray(data.notes)) state.notes = data.notes;
     if (Array.isArray(data.ddays)) state.ddays = data.ddays;
@@ -1227,257 +1283,166 @@ function restoreFullAppState(data) {
     localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(state.notes));
     localStorage.setItem(STORAGE_KEYS.DDAYS, JSON.stringify(state.ddays));
 
-    if (__originalRenderDashboardFinal) __originalRenderDashboardFinal();
-    renderCalendar();
-    if (__originalRenderTodoListFinal) __originalRenderTodoListFinal();
-    if (__originalRenderNotesListFinal) __originalRenderNotesListFinal();
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (typeof renderCalendar === 'function') renderCalendar();
+    if (typeof renderTodoList === 'function') renderTodoList();
+    if (typeof renderNotesList === 'function') renderNotesList();
 }
 
-function initApp() {
-    ensureEventTimeFields();
-    loadDataFromStorage();
-    state.events = state.events.map(migrateEventTimeFields);
-    initDateTime();
-    initTabs();
-    initDashboard();
-    initCalendar();
-    initTodos();
-    initNotes();
-    initSettings();
-    initModals();
-    updateSyncIndicator();
-    renderCalendar();
+function updateSyncIndicator() {
+    const indicator = document.getElementById('sidebar-sync-indicator');
+    const indicatorText = document.getElementById('sidebar-sync-text');
+    const configured = typeof GithubSync !== 'undefined' && GithubSync.isConfigured();
 
-    if (typeof AutoSync !== 'undefined') {
-        AutoSync.initAutoSync((cloudData) => {
-            restoreFullAppState(cloudData);
-        });
-    }
-}
-
-function ensureEventTimeFields() {
-    if (document.getElementById('event-start-time')) return;
-
-    const startDateInput = document.getElementById('event-start-date');
-    const endDateInput = document.getElementById('event-end-date');
-    if (!startDateInput || !endDateInput) return;
-
-    const dateRow = startDateInput.closest('.form-row');
-    if (!dateRow) return;
-
-    const timeRow = document.createElement('div');
-    timeRow.className = 'form-row';
-    timeRow.innerHTML = `
-        <div class="form-group">
-            <label for="event-start-time">시작시간</label>
-            <input type="time" id="event-start-time" step="300">
-        </div>
-        <div class="form-group">
-            <label for="event-end-time">종료시간</label>
-            <input type="time" id="event-end-time" step="300">
-        </div>
-    `;
-    dateRow.insertAdjacentElement('afterend', timeRow);
-}
-
-function initCalendar() {
-    ensureEventTimeFields();
-
-    document.getElementById('cal-prev-month').addEventListener('click', () => {
-        state.currentDate.setMonth(state.currentDate.getMonth() - 1);
-        renderCalendar();
-    });
-
-    document.getElementById('cal-next-month').addEventListener('click', () => {
-        state.currentDate.setMonth(state.currentDate.getMonth() + 1);
-        renderCalendar();
-    });
-
-    document.getElementById('cal-today').addEventListener('click', () => {
-        state.currentDate = new Date();
-        renderCalendar();
-    });
-
-    document.getElementById('btn-add-event').addEventListener('click', () => {
-        openEventModal();
-    });
-
-    const eventForm = document.getElementById('event-form');
-    const startDateInput = document.getElementById('event-start-date');
-    const endDateInput = document.getElementById('event-end-date');
-    const startTimeInput = document.getElementById('event-start-time');
-    const endTimeInput = document.getElementById('event-end-time');
-
-    startDateInput.addEventListener('change', () => {
-        if (!endDateInput.value || endDateInput.value < startDateInput.value) {
-            endDateInput.value = startDateInput.value;
-        }
-    });
-
-    eventForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const id = document.getElementById('event-id').value;
-        const title = document.getElementById('event-title').value.trim();
-        const startDate = startDateInput.value;
-        const endDate = endDateInput.value;
-        const startTime = startTimeInput.value || '';
-        const endTime = endTimeInput.value || '';
-        const color = document.getElementById('event-color').value;
-        const desc = document.getElementById('event-desc').value.trim();
-
-        if (!title) {
-            alert('일정 제목을 입력해주세요.');
-            return;
-        }
-        if (startDate > endDate) {
-            alert('종료일은 시작일보다 빠를 수 없습니다.');
-            return;
-        }
-        if (startDate === endDate && startTime && endTime && endTime < startTime) {
-            alert('같은 날짜에서는 종료시간이 시작시간보다 빠를 수 없습니다.');
-            return;
-        }
-
-        const eventData = { id: id || 'evt_' + Date.now(), title, startDate, endDate, startTime, endTime, color, desc };
-
-        if (id) {
-            const idx = state.events.findIndex(evt => evt.id === id);
-            if (idx !== -1) state.events[idx] = eventData;
+    if (indicator && indicatorText) {
+        if (configured) {
+            indicator.className = 'sync-status online';
+            indicatorText.textContent = '클라우드 동기화';
         } else {
-            state.events.push(eventData);
+            indicator.className = 'sync-status offline';
+            indicatorText.textContent = '로컬 모드';
+        }
+    }
+
+    if (configured) {
+        const settings = GithubSync.getSettings();
+        const shortId = settings.gistId ? settings.gistId.slice(0, 8) : '미설정';
+        setMobileSyncStatus(`클라우드 동기화 | Gist: ${shortId}`, 'online');
+    } else {
+        setMobileSyncStatus('로컬 모드 | 설정에서 PAT/Gist ID 입력 필요', 'offline');
+    }
+}
+
+function renderSyncLogBox() {
+    const logBox = document.getElementById('sync-log-box');
+    const gistLink = document.getElementById('gist-url-link');
+    const lastSyncTimeEl = document.getElementById('last-sync-time');
+    if (!logBox || typeof GithubSync === 'undefined') return;
+
+    const settings = GithubSync.getSettings();
+    if (settings.pat) {
+        logBox.classList.remove('hidden');
+        if (settings.gistId) {
+            gistLink.href = `https://gist.github.com/${settings.gistId}`;
+            gistLink.textContent = 'Gist 열기';
+            gistLink.parentElement.style.display = 'flex';
+        } else {
+            gistLink.href = '#';
+            gistLink.textContent = 'Gist ID 없음';
+            gistLink.parentElement.style.display = 'flex';
+        }
+        lastSyncTimeEl.textContent = settings.lastSync ? new Date(settings.lastSync).toLocaleString('ko-KR') : '없음';
+    } else {
+        logBox.classList.add('hidden');
+    }
+}
+
+async function executeGitHubSync() {
+    const syncIndicator = document.getElementById('sidebar-sync-indicator');
+    const syncText = document.getElementById('sidebar-sync-text');
+    const syncNowBtn = document.getElementById('btn-sync-now');
+
+    try {
+        if (!GithubSync.isConfigured()) {
+            throw new Error('PAT가 저장되지 않았습니다. 설정 및 동기화에서 PAT를 입력한 뒤 설정 저장 및 연결을 눌러주세요.');
         }
 
-        saveDataToStorage();
-        closeModal(document.getElementById('modal-event'));
-        renderCalendar();
-    });
+        if (syncNowBtn) syncNowBtn.disabled = true;
+        if (syncIndicator) syncIndicator.className = 'sync-status syncing';
+        if (syncText) syncText.textContent = '동기화 중...';
+        setMobileSyncStatus('동기화 중... 클라우드 데이터 확인', 'syncing');
 
-    document.getElementById('btn-delete-event').addEventListener('click', () => {
-        const id = document.getElementById('event-id').value;
-        if (!id) return;
-        if (!confirm('일정을 삭제하시겠습니까?')) return;
-        state.events = state.events.filter(evt => evt.id !== id);
-        saveDataToStorage();
-        closeModal(document.getElementById('modal-event'));
-        renderCalendar();
-    });
+        const localData = getFullAppState();
+        const localCount = countAppData(localData);
 
-    document.getElementById('btn-cancel-event').addEventListener('click', () => {
-        closeModal(document.getElementById('modal-event'));
-    });
+        const downloadResult = await GithubSync.downloadData();
+        if (downloadResult.success && downloadResult.data) {
+            const remoteCount = countAppData(downloadResult.data);
 
-    renderCalendar();
+            if (localCount === 0 && remoteCount > 0) {
+                restoreFullAppState(downloadResult.data);
+                setMobileSyncStatus(`다운로드 완료 | ${remoteCount}개 항목`, 'online');
+                alert(`클라우드 데이터를 불러왔습니다. (${remoteCount}개 항목)`);
+                updateSyncIndicator();
+                renderSyncLogBox();
+                return;
+            }
+
+            if (remoteCount > localCount) {
+                restoreFullAppState(downloadResult.data);
+                setMobileSyncStatus(`클라우드 최신 데이터 반영 | ${remoteCount}개 항목`, 'online');
+                alert(`클라우드의 더 많은 데이터를 불러왔습니다. (${remoteCount}개 항목)`);
+                updateSyncIndicator();
+                renderSyncLogBox();
+                return;
+            }
+        }
+
+        setMobileSyncStatus('로컬 데이터를 클라우드로 업로드 중...', 'syncing');
+        const uploadResult = await GithubSync.uploadData(localData);
+        const total = countAppData(localData);
+        setMobileSyncStatus(`업로드 완료 | ${total}개 항목`, 'online');
+        alert(`동기화 완료: 현재 기기 데이터를 클라우드에 업로드했습니다. (${total}개 항목)`);
+
+        const gistIdInput = document.getElementById('github-gist-id');
+        if (gistIdInput && uploadResult.gistId) gistIdInput.value = uploadResult.gistId;
+        updateSyncIndicator();
+        renderSyncLogBox();
+    } catch (error) {
+        console.error(error);
+        setMobileSyncStatus(`동기화 실패: ${error.message}`, 'error');
+        alert(`동기화 실패: ${error.message}`);
+        if (syncIndicator) syncIndicator.className = 'sync-status offline';
+        if (syncText) syncText.textContent = '동기화 실패';
+    } finally {
+        if (syncNowBtn) syncNowBtn.disabled = false;
+    }
 }
 
-function renderCalendar() {
-    const year = state.currentDate.getFullYear();
-    const month = state.currentDate.getMonth();
-    document.getElementById('calendar-month-year').textContent = `${year}년 ${month + 1}월`;
-
-    const grid = document.getElementById('calendar-grid');
-    grid.innerHTML = '';
-
-    const firstDayIndex = new Date(year, month, 1).getDay();
-    const lastDay = new Date(year, month + 1, 0).getDate();
-    const prevLastDay = new Date(year, month, 0).getDate();
-    let cells = [];
-
-    for (let x = firstDayIndex; x > 0; x--) {
-        const day = prevLastDay - x + 1;
-        const tempDate = new Date(year, month - 1, day);
-        cells.push({ day, dateStr: getLocalDateString(tempDate), isOtherMonth: true });
+const __oldInitSettingsSyncPatch = initSettings;
+function initSettings() {
+    if (typeof __oldInitSettingsSyncPatch === 'function') {
+        __oldInitSettingsSyncPatch();
     }
 
-    for (let i = 1; i <= lastDay; i++) {
-        const tempDate = new Date(year, month, i);
-        cells.push({ day: i, dateStr: getLocalDateString(tempDate), isOtherMonth: false });
+    const patInput = document.getElementById('github-pat');
+    const gistIdInput = document.getElementById('github-gist-id');
+    const syncNowBtn = document.getElementById('btn-sync-now');
+    const syncForm = document.getElementById('github-sync-form');
+
+    if (typeof GithubSync !== 'undefined') {
+        const settings = GithubSync.getSettings();
+        if (patInput && settings.pat) patInput.value = settings.pat;
+        if (gistIdInput && settings.gistId) gistIdInput.value = settings.gistId;
+        if (syncNowBtn && settings.pat) syncNowBtn.classList.remove('hidden');
     }
 
-    const remainingCells = 42 - cells.length;
-    for (let j = 1; j <= remainingCells; j++) {
-        const tempDate = new Date(year, month + 1, j);
-        cells.push({ day: j, dateStr: getLocalDateString(tempDate), isOtherMonth: true });
+    if (syncForm && !syncForm.dataset.finalSyncPatch) {
+        syncForm.dataset.finalSyncPatch = '1';
+        syncForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const patVal = patInput ? patInput.value.trim() : '';
+            const gistIdVal = gistIdInput ? gistIdInput.value.trim() : '';
+            if (!patVal) {
+                alert('GitHub PAT를 입력해주세요.');
+                return;
+            }
+            GithubSync.saveSettings(patVal, gistIdVal);
+            if (syncNowBtn) syncNowBtn.classList.remove('hidden');
+            updateSyncIndicator();
+            renderSyncLogBox();
+            setMobileSyncStatus('설정 저장 완료 | 동기화 버튼을 눌러주세요', 'online');
+            alert('동기화 설정이 저장되었습니다. 이제 지금 동기화를 눌러주세요.');
+        }, true);
     }
 
-    const todayStr = getLocalDateString(new Date());
-
-    cells.forEach(cell => {
-        const cellEl = document.createElement('div');
-        cellEl.className = 'calendar-cell';
-        if (cell.isOtherMonth) cellEl.classList.add('other-month');
-        if (cell.dateStr === todayStr) cellEl.classList.add('today');
-
-        cellEl.innerHTML = `
-            <span class="cell-num">${cell.day}</span>
-            <div class="cell-events"></div>
-        `;
-
-        const cellEvents = state.events
-            .map(migrateEventTimeFields)
-            .filter(e => cell.dateStr >= e.startDate && cell.dateStr <= (e.endDate || e.startDate))
-            .sort((a, b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99'));
-
-        const eventsContainer = cellEl.querySelector('.cell-events');
-        cellEvents.forEach(evt => {
-            const badge = document.createElement('div');
-            badge.className = 'event-badge';
-            badge.style.backgroundColor = evt.color || 'var(--color-primary)';
-            const timeText = formatEventTime(evt);
-            badge.textContent = `${timeText}${evt.title}`;
-            badge.title = `${timeText}${evt.title}`;
-            badge.addEventListener('click', (e) => {
-                e.stopPropagation();
-                openEventModal(evt);
-            });
-            eventsContainer.appendChild(badge);
-        });
-
-        cellEl.addEventListener('click', () => {
-            openEventModal(null, cell.dateStr);
-        });
-
-        grid.appendChild(cellEl);
-    });
+    updateSyncIndicator();
+    renderSyncLogBox();
 }
 
-function openEventModal(eventObj = null, defaultDateStr = null) {
-    ensureEventTimeFields();
-    const modal = document.getElementById('modal-event');
-    const form = document.getElementById('event-form');
-    const deleteBtn = document.getElementById('btn-delete-event');
-    const titleHeader = document.getElementById('modal-event-title');
-
-    form.reset();
-
-    if (eventObj) {
-        eventObj = migrateEventTimeFields(eventObj);
-        titleHeader.textContent = '일정 수정';
-        document.getElementById('event-id').value = eventObj.id;
-        document.getElementById('event-title').value = eventObj.title;
-        document.getElementById('event-start-date').value = eventObj.startDate;
-        document.getElementById('event-end-date').value = eventObj.endDate || eventObj.startDate;
-        document.getElementById('event-start-time').value = eventObj.startTime || '';
-        document.getElementById('event-end-time').value = eventObj.endTime || '';
-        document.getElementById('event-color').value = eventObj.color || '#3498db';
-        document.getElementById('event-desc').value = eventObj.desc || '';
-        deleteBtn.classList.remove('hidden');
-    } else {
-        titleHeader.textContent = '새 일정 추가';
-        const todayOrSelected = defaultDateStr || getLocalDateString(new Date());
-        document.getElementById('event-id').value = '';
-        document.getElementById('event-start-date').value = todayOrSelected;
-        document.getElementById('event-end-date').value = todayOrSelected;
-        document.getElementById('event-start-time').value = '';
-        document.getElementById('event-end-time').value = '';
-        document.getElementById('event-color').value = '#3498db';
-        deleteBtn.classList.add('hidden');
-    }
-
-    openModal(modal);
-}
-
-function formatEventTime(evt) {
-    if (evt.startTime && evt.endTime) return `${evt.startTime}~${evt.endTime} `;
-    if (evt.startTime) return `${evt.startTime} `;
-    return '';
-}
+document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+        ensureMobileSyncStatusBox();
+        updateSyncIndicator();
+    }, 300);
+});
