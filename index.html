@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G-Scheduler & Notes</title>
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Main Style Sheet -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Background Glow Effects -->
+    <div class="glow-bg">
+        <div class="glow-circle circle-1"></div>
+        <div class="glow-circle circle-2"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <i class="fa-solid fa-calendar-check brand-icon"></i>
+                <span class="brand-text">G-Scheduler</span>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <button class="nav-btn active" data-tab="dashboard">
+                    <i class="fa-solid fa-chart-pie"></i>
+                    <span>대시보드</span>
+                </button>
+                <button class="nav-btn" data-tab="calendar">
+                    <i class="fa-solid fa-calendar-days"></i>
+                    <span>달력 일정</span>
+                </button>
+                <button class="nav-btn" data-tab="todos">
+                    <i class="fa-solid fa-list-check"></i>
+                    <span>업무 리스트</span>
+                </button>
+                <button class="nav-btn" data-tab="notes">
+                    <i class="fa-solid fa-note-sticky"></i>
+                    <span>정보 메모</span>
+                </button>
+                <button class="nav-btn" data-tab="settings">
+                    <i class="fa-solid fa-gear"></i>
+                    <span>설정 및 동기화</span>
+                </button>
+            </nav>
+
+            <!-- Quick Info/Sync Status in Sidebar -->
+            <div class="sidebar-footer">
+                <div class="sync-status offline" id="sidebar-sync-indicator">
+                    <i class="fa-solid fa-circle"></i>
+                    <span id="sidebar-sync-text">로컬 모드</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- HEADER -->
+            <header class="content-header">
+                <h1 id="page-title">대시보드</h1>
+                <div class="header-actions">
+                    <div class="current-time" id="header-time">2026. 07. 15. (수)</div>
+                    <button class="btn btn-primary btn-sm" id="btn-quick-add">
+                        <i class="fa-solid fa-plus"></i> 빠른 추가
+                    </button>
+                </div>
+            </header>
+
+            <!-- TAB CONTENT: DASHBOARD -->
+            <section class="tab-panel active" id="tab-dashboard">
+                <div class="dashboard-grid">
+                    <!-- Column 1: Progress & Today Stats -->
+                    <div class="dashboard-card card-progress">
+                        <h3>오늘의 할 일 진행률</h3>
+                        <div class="progress-container">
+                            <div class="circular-progress">
+                                <svg class="progress-ring" width="160" height="160">
+                                    <circle class="progress-ring-circle-bg" stroke="rgba(255,255,255,0.05)" stroke-width="12" fill="transparent" r="70" cx="80" cy="80"/>
+                                    <circle class="progress-ring-circle" id="dashboard-progress-bar" stroke="url(#progress-grad)" stroke-width="12" stroke-dasharray="439.82" stroke-dashoffset="439.82" stroke-linecap="round" fill="transparent" r="70" cx="80" cy="80"/>
+                                    <defs>
+                                        <linearGradient id="progress-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                            <stop offset="0%" stop-color="#8a2387" />
+                                            <stop offset="50%" stop-color="#e94057" />
+                                            <stop offset="100%" stop-color="#f27121" />
+                                        </linearGradient>
+                                    </defs>
+                                </svg>
+                                <div class="progress-text">
+                                    <span id="progress-percentage">0%</span>
+                                    <small id="progress-ratio">0 / 0 완료</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Column 2: D-Day Counter -->
+                    <div class="dashboard-card card-dday">
+                        <div class="card-header-flex">
+                            <h3>중요 일정 D-Day</h3>
+                            <button class="btn-icon" id="btn-add-dday" title="D-Day 추가"><i class="fa-solid fa-plus"></i></button>
+                        </div>
+                        <div class="dday-list" id="dashboard-dday-list">
+                            <!-- Dynamic D-Days -->
+                            <div class="no-data">등록된 D-Day 일정이 없습니다.</div>
+                        </div>
+                    </div>
+
+                    <!-- Column 3: Today's Schedule -->
+                    <div class="dashboard-card card-today-schedule">
+                        <h3>오늘의 일정</h3>
+                        <div class="today-schedule-list" id="dashboard-today-events">
+                            <!-- Dynamic Schedule -->
+                            <div class="no-data">오늘 일정이 없습니다.</div>
+                        </div>
+                    </div>
+
+                    <!-- Column 4: Quick Notes Summary -->
+                    <div class="dashboard-card card-quick-links">
+                        <h3>자주 찾는 링크 및 정보</h3>
+                        <div class="quick-links-grid" id="dashboard-quick-links">
+                            <!-- Dynamic Quick Links -->
+                            <div class="no-data">등록된 중요 메모가 없습니다.</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB CONTENT: CALENDAR -->
+            <section class="tab-panel" id="tab-calendar">
+                <div class="calendar-container">
+                    <div class="calendar-header">
+                        <div class="calendar-nav">
+                            <button class="btn btn-secondary" id="cal-prev-month"><i class="fa-solid fa-chevron-left"></i></button>
+                            <h2 id="calendar-month-year">2026년 7월</h2>
+                            <button class="btn btn-secondary" id="cal-next-month"><i class="fa-solid fa-chevron-right"></i></button>
+                        </div>
+                        <div class="calendar-actions">
+                            <button class="btn btn-secondary" id="cal-today">오늘</button>
+                            <button class="btn btn-primary" id="btn-add-event"><i class="fa-solid fa-plus"></i> 일정 추가</button>
+                        </div>
+                    </div>
+                    <div class="calendar-weekdays">
+                        <div>일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div>토</div>
+                    </div>
+                    <div class="calendar-grid" id="calendar-grid">
+                        <!-- Dynamic Calendar Cells -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB CONTENT: TODOS -->
+            <section class="tab-panel" id="tab-todos">
+                <div class="todo-layout">
+                    <!-- Todo Control Form -->
+                    <div class="todo-sidebar-card">
+                        <h3>새 할 일 추가</h3>
+                        <form id="todo-form">
+                            <div class="form-group">
+                                <label for="todo-input">할 일 제목</label>
+                                <input type="text" id="todo-input" placeholder="업무 내용을 입력하세요" required autocomplete="off">
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="todo-priority">우선순위</label>
+                                    <select id="todo-priority">
+                                        <option value="low">낮음</option>
+                                        <option value="medium" selected>보통</option>
+                                        <option value="high">높음</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="todo-duedate">마감일</label>
+                                    <input type="date" id="todo-duedate">
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-block">추가하기</button>
+                        </form>
+                    </div>
+
+                    <!-- Todo List Area -->
+                    <div class="todo-list-card">
+                        <div class="todo-filters">
+                            <button class="filter-btn active" data-filter="all">전체</button>
+                            <button class="filter-btn" data-filter="active">진행 중</button>
+                            <button class="filter-btn" data-filter="completed">완료됨</button>
+                        </div>
+                        <div class="todo-items-container" id="todo-items-list">
+                            <!-- Dynamic Todo Items -->
+                            <div class="no-data">할 일이 없습니다. 여유로운 하루를 보내세요!</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB CONTENT: NOTES -->
+            <section class="tab-panel" id="tab-notes">
+                <div class="notes-layout">
+                    <!-- Notes Sidebar (Categories & Notes List) -->
+                    <div class="notes-sidebar">
+                        <div class="sidebar-header-flex">
+                            <h3>메모 목록</h3>
+                            <button class="btn btn-primary btn-xs" id="btn-new-note">
+                                <i class="fa-solid fa-plus"></i> 새 메모
+                            </button>
+                        </div>
+                        <div class="notes-list" id="notes-list-items">
+                            <!-- Dynamic Notes List -->
+                            <div class="no-data">메모가 없습니다.</div>
+                        </div>
+                    </div>
+
+                    <!-- Note Detail / Editor Area -->
+                    <div class="note-editor-card">
+                        <div id="note-editor-placeholder" class="editor-placeholder">
+                            <i class="fa-solid fa-edit"></i>
+                            <p>작성된 메모를 선택하거나 새로운 메모를 만들어보세요.</p>
+                        </div>
+                        <div id="note-editor-form" class="note-editor-form hidden">
+                            <input type="hidden" id="note-id">
+                            <div class="editor-header">
+                                <input type="text" id="note-title" placeholder="제목 없는 메모" autocomplete="off">
+                                <div class="editor-actions">
+                                    <button class="btn btn-secondary btn-icon-only" id="btn-favorite-note" title="중요 설정 (대시보드 표시)">
+                                        <i class="fa-regular fa-star"></i>
+                                    </button>
+                                    <button class="btn btn-danger btn-icon-only" id="btn-delete-note" title="메모 삭제">
+                                        <i class="fa-solid fa-trash"></i>
+                                    </button>
+                                    <button class="btn btn-success" id="btn-save-note">
+                                        <i class="fa-solid fa-save"></i> 저장
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="form-group-note">
+                                <input type="text" id="note-category" placeholder="카테고리 (예: 업무, 개발, 개인)" autocomplete="off">
+                            </div>
+                            <div class="form-group-note">
+                                <input type="text" id="note-links" placeholder="참고 링크 (쉼표나 공백으로 여러 개 구분)" autocomplete="off">
+                            </div>
+                            <div class="editor-body">
+                                <textarea id="note-content" placeholder="이곳에 내용을 작성하세요. 웹사이트 주소를 적으면 링크로 변환됩니다..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB CONTENT: SETTINGS -->
+            <section class="tab-panel" id="tab-settings">
+                <div class="settings-grid">
+                    <!-- Backup & Restore -->
+                    <div class="settings-card">
+                        <h3><i class="fa-solid fa-database"></i> 데이터 관리 (로컬)</h3>
+                        <p class="settings-desc">브라우저 로컬 스토리지에 저장된 데이터를 수동으로 백업하거나 복원할 수 있습니다.</p>
+                        
+                        <div class="settings-actions">
+                            <button class="btn btn-secondary" id="btn-export-json">
+                                <i class="fa-solid fa-file-export"></i> 데이터 백업 (JSON 다운로드)
+                            </button>
+                            <div class="file-upload-wrapper">
+                                <button class="btn btn-secondary" id="btn-trigger-import">
+                                    <i class="fa-solid fa-file-import"></i> 데이터 복원 (JSON 업로드)
+                                </button>
+                                <input type="file" id="import-file-input" accept=".json" style="display: none;">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- GitHub Sync -->
+                    <div class="settings-card">
+                        <h3><i class="fa-brands fa-github"></i> GitHub Gist 동기화</h3>
+                        <p class="settings-desc">GitHub의 Gist 기능을 활용하여 어디서나 데이터를 불러오고 내보낼 수 있는 퍼스널 클라우드를 구축합니다.</p>
+                        
+                        <form id="github-sync-form">
+                            <div class="form-group">
+                                <label for="github-pat">Personal Access Token (Classic)</label>
+                                <input type="password" id="github-pat" placeholder="ghp_..." autocomplete="off">
+                                <small class="input-tip">
+                                    필요 권한(Scope): <code>gist</code> 권한이 포함된 토큰이 필요합니다. <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer">토큰 생성하러 가기 <i class="fa-solid fa-up-right-from-square"></i></a>
+                                </small>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="github-gist-id">Gist ID (선택사항)</label>
+                                <input type="text" id="github-gist-id" placeholder="기존 Gist ID가 있을 경우 입력하세요">
+                                <small class="input-tip">비워둔 상태에서 처음 동기화할 시 새 비밀 Gist가 자동 생성됩니다.</small>
+                            </div>
+
+                            <div class="sync-actions-box">
+                                <button type="submit" class="btn btn-primary" id="btn-save-sync-settings">
+                                    <i class="fa-solid fa-save"></i> 설정 저장 및 연결
+                                </button>
+                                <button type="button" class="btn btn-success hidden" id="btn-sync-now">
+                                    <i class="fa-solid fa-rotate"></i> 지금 동기화
+                                </button>
+                            </div>
+                        </form>
+
+                        <div class="sync-log-box hidden" id="sync-log-box">
+                            <h4>동기화 정보</h4>
+                            <div class="sync-info-item">
+                                <span>Gist 링크:</span>
+                                <a id="gist-url-link" href="#" target="_blank">이동하기 <i class="fa-solid fa-arrow-up-right-from-square"></i></a>
+                            </div>
+                            <div class="sync-info-item">
+                                <span>최종 동기화 시간:</span>
+                                <span id="last-sync-time">없음</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- MODAL: ADD/EDIT EVENT (CALENDAR) -->
+    <div class="modal" id="modal-event">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-event-title">새 일정 추가</h3>
+                <button class="btn-close" id="modal-event-close">&times;</button>
+            </div>
+            <form id="event-form">
+                <input type="hidden" id="event-id">
+                <div class="form-group">
+                    <label for="event-title">일정 제목</label>
+                    <input type="text" id="event-title" placeholder="일정 내용을 입력하세요" required autocomplete="off">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="event-date">날짜</label>
+                        <input type="date" id="event-date" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="event-color">색상</label>
+                        <select id="event-color">
+                            <option value="#3498db" style="background-color: #3498db; color: white;">파란색</option>
+                            <option value="#2ecc71" style="background-color: #2ecc71; color: white;">녹색</option>
+                            <option value="#e74c3c" style="background-color: #e74c3c; color: white;">빨간색</option>
+                            <option value="#f1c40f" style="background-color: #f1c40f; color: black;">노란색</option>
+                            <option value="#9b59b6" style="background-color: #9b59b6; color: white;">보라색</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="event-desc">상세 내용 (메모)</label>
+                    <textarea id="event-desc" placeholder="일정 상세 정보를 적어두세요..."></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-danger hidden" id="btn-delete-event">삭제</button>
+                    <button type="button" class="btn btn-secondary" id="btn-cancel-event">취소</button>
+                    <button type="submit" class="btn btn-primary" id="btn-submit-event">저장</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: ADD/EDIT D-DAY -->
+    <div class="modal" id="modal-dday">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>중요 일정 D-Day 등록</h3>
+                <button class="btn-close" id="modal-dday-close">&times;</button>
+            </div>
+            <form id="dday-form">
+                <input type="hidden" id="dday-id">
+                <div class="form-group">
+                    <label for="dday-title">목표 / 일정 제목</label>
+                    <input type="text" id="dday-title" placeholder="예: 소방박람회 보고서 제출" required autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="dday-date">목표 날짜</label>
+                    <input type="date" id="dday-date" required>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="btn-cancel-dday">취소</button>
+                    <button type="submit" class="btn btn-primary">등록하기</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main JavaScript Logic Files -->
+    <script src="github-sync.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
