@@ -1,6 +1,11 @@
 /**
- * G-Scheduler & Notes - Final app.js
- * Fixes: initSettings recursion, calendar time fields, 5-minute time step, mobile sync status
+ * G-Scheduler & Notes - FINAL SAFE SYNC VERSION
+ * - Fixes initSettings recursion
+ * - Adds explicit Cloud Upload / Cloud Download buttons
+ * - Moves mobile sync status bar to TOP
+ * - Prevents empty local data from overwriting non-empty cloud data
+ * - Preserves PAT on mobile even when password input appears blank
+ * - Calendar event time fields with 5-minute step
  */
 
 const state = {
@@ -21,6 +26,9 @@ const STORAGE_KEYS = {
 let todoFilter = 'all';
 let activeNoteId = null;
 
+// =====================================================
+// BASIC UTILITIES
+// =====================================================
 function getLocalDateString(dateObj) {
   const year = dateObj.getFullYear();
   const month = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -45,6 +53,7 @@ function migrateEventTimeFields(evt) {
     evt.endDate = evt.date;
     delete evt.date;
   }
+  if (!evt.startDate && evt.endDate) evt.startDate = evt.endDate;
   if (!evt.endDate) evt.endDate = evt.startDate;
   if (!evt.startTime) evt.startTime = '';
   if (!evt.endTime) evt.endTime = '';
@@ -63,6 +72,61 @@ function formatEventTime(evt) {
   return '';
 }
 
+function countAppData(data) {
+  if (!data) return 0;
+  return (Array.isArray(data.events) ? data.events.length : 0)
+    + (Array.isArray(data.todos) ? data.todos.length : 0)
+    + (Array.isArray(data.notes) ? data.notes.length : 0)
+    + (Array.isArray(data.ddays) ? data.ddays.length : 0);
+}
+
+function normalizeAppData(data) {
+  return {
+    events: Array.isArray(data?.events) ? data.events.map(migrateEventTimeFields) : [],
+    todos: Array.isArray(data?.todos) ? data.todos : [],
+    notes: Array.isArray(data?.notes) ? data.notes : [],
+    ddays: Array.isArray(data?.ddays) ? data.ddays : [],
+    updatedAt: data?.updatedAt || new Date().toISOString()
+  };
+}
+
+function mergeById(localArr = [], remoteArr = [], preferRemote = true) {
+  const map = new Map();
+  localArr.forEach(item => {
+    if (!item) return;
+    const id = item.id || `${Date.now()}_${Math.random()}`;
+    map.set(id, { ...item, id });
+  });
+  remoteArr.forEach(item => {
+    if (!item) return;
+    const id = item.id || `${Date.now()}_${Math.random()}`;
+    if (!map.has(id)) {
+      map.set(id, { ...item, id });
+      return;
+    }
+    const existing = map.get(id);
+    const a = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+    const b = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
+    if (b > a || (a === 0 && b === 0 && preferRemote)) map.set(id, { ...item, id });
+  });
+  return Array.from(map.values());
+}
+
+function mergeAppData(localData, remoteData) {
+  const local = normalizeAppData(localData);
+  const remote = normalizeAppData(remoteData);
+  return {
+    events: mergeById(local.events, remote.events, true).map(migrateEventTimeFields),
+    todos: mergeById(local.todos, remote.todos, true),
+    notes: mergeById(local.notes, remote.notes, true),
+    ddays: mergeById(local.ddays, remote.ddays, true),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+// =====================================================
+// DATA MANAGEMENT
+// =====================================================
 function loadDataFromStorage() {
   try {
     state.events = (JSON.parse(localStorage.getItem(STORAGE_KEYS.EVENTS)) || []).map(migrateEventTimeFields);
@@ -75,14 +139,14 @@ function loadDataFromStorage() {
 }
 
 function saveDataToStorage() {
+  saveDataToStorageOnly();
+}
+
+function saveDataToStorageOnly() {
   localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(state.events.map(migrateEventTimeFields)));
   localStorage.setItem(STORAGE_KEYS.TODOS, JSON.stringify(state.todos));
   localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(state.notes));
   localStorage.setItem(STORAGE_KEYS.DDAYS, JSON.stringify(state.ddays));
-
-  if (typeof AutoSync !== 'undefined' && typeof AutoSync.scheduleUpload === 'function') {
-    AutoSync.scheduleUpload(getFullAppState());
-  }
 }
 
 function getFullAppState() {
@@ -95,29 +159,34 @@ function getFullAppState() {
   };
 }
 
-function countAppData(data) {
-  if (!data) return 0;
-  return (Array.isArray(data.events) ? data.events.length : 0)
-    + (Array.isArray(data.todos) ? data.todos.length : 0)
-    + (Array.isArray(data.notes) ? data.notes.length : 0)
-    + (Array.isArray(data.ddays) ? data.ddays.length : 0);
-}
-
 function restoreFullAppState(data) {
-  if (!data) return;
-  if (Array.isArray(data.events)) state.events = data.events.map(migrateEventTimeFields);
-  if (Array.isArray(data.todos)) state.todos = data.todos;
-  if (Array.isArray(data.notes)) state.notes = data.notes;
-  if (Array.isArray(data.ddays)) state.ddays = data.ddays;
+  const normalized = normalizeAppData(data);
+  state.events = normalized.events;
+  state.todos = normalized.todos;
+  state.notes = normalized.notes;
+  state.ddays = normalized.ddays;
   saveDataToStorageOnly();
   renderAll();
 }
 
-function saveDataToStorageOnly() {
-  localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(state.events.map(migrateEventTimeFields)));
-  localStorage.setItem(STORAGE_KEYS.TODOS, JSON.stringify(state.todos));
-  localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(state.notes));
-  localStorage.setItem(STORAGE_KEYS.DDAYS, JSON.stringify(state.ddays));
+// =====================================================
+// INITIALIZATION
+// =====================================================
+document.addEventListener('DOMContentLoaded', initApp);
+
+function initApp() {
+  loadDataFromStorage();
+  initDateTime();
+  initTabs();
+  initDashboard();
+  initCalendar();
+  initTodos();
+  initNotes();
+  initSettings();
+  initModals();
+  renderAll();
+  updateSyncIndicator();
+  renderSyncLogBox();
 }
 
 function renderAll() {
@@ -139,23 +208,6 @@ function closeModal(modalEl) {
   setTimeout(() => { modalEl.style.display = 'none'; }, 250);
 }
 
-function initApp() {
-  loadDataFromStorage();
-  initDateTime();
-  initTabs();
-  initDashboard();
-  initCalendar();
-  initTodos();
-  initNotes();
-  initSettings();
-  initModals();
-  renderAll();
-  updateSyncIndicator();
-  renderSyncLogBox();
-}
-
-document.addEventListener('DOMContentLoaded', initApp);
-
 function initDateTime() {
   const timeEl = document.getElementById('header-time');
   const update = () => {
@@ -169,17 +221,15 @@ function initDateTime() {
 }
 
 function initTabs() {
-  const navButtons = document.querySelectorAll('.nav-btn');
-  const tabPanels = document.querySelectorAll('.tab-panel');
-  const pageTitle = document.getElementById('page-title');
   const titles = { dashboard: '대시보드', calendar: '달력 일정', todos: '업무 리스트', notes: '정보 메모', settings: '설정 및 동기화' };
-  navButtons.forEach(btn => {
+  document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.tab;
-      navButtons.forEach(b => b.classList.remove('active'));
-      tabPanels.forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById(`tab-${tab}`)?.classList.add('active');
+      const pageTitle = document.getElementById('page-title');
       if (pageTitle) pageTitle.textContent = titles[tab] || '';
       if (tab === 'settings') renderSyncLogBox();
     });
@@ -193,6 +243,9 @@ function initModals() {
   document.getElementById('btn-cancel-dday')?.addEventListener('click', () => closeModal(document.getElementById('modal-dday')));
 }
 
+// =====================================================
+// DASHBOARD
+// =====================================================
 function initDashboard() {
   document.getElementById('btn-add-dday')?.addEventListener('click', openDdayModal);
   document.getElementById('dday-form')?.addEventListener('submit', e => {
@@ -202,7 +255,7 @@ function initDashboard() {
     const date = document.getElementById('dday-date').value;
     if (!title || !date) return;
     const idx = state.ddays.findIndex(d => d.id === id);
-    const item = { id, title, date };
+    const item = { id, title, date, updatedAt: new Date().toISOString() };
     if (idx >= 0) state.ddays[idx] = item; else state.ddays.push(item);
     saveDataToStorage();
     renderDashboard();
@@ -248,7 +301,7 @@ function renderDdayList() {
   });
   el.querySelectorAll('.btn-delete-dday').forEach(btn => btn.addEventListener('click', () => {
     state.ddays = state.ddays.filter(d => d.id !== btn.dataset.id);
-    saveDataToStorage(); renderDdayList();
+    saveDataToStorage(); renderDashboard();
   }));
 }
 
@@ -257,7 +310,9 @@ function renderTodayEvents() {
   if (!el) return;
   el.innerHTML = '';
   const today = getLocalDateString(new Date());
-  const items = state.events.map(migrateEventTimeFields).filter(e => isDateInRange(today, e.startDate, e.endDate)).sort((a,b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99'));
+  const items = state.events.map(migrateEventTimeFields)
+    .filter(e => isDateInRange(today, e.startDate, e.endDate))
+    .sort((a,b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99'));
   if (!items.length) { el.innerHTML = '<div class="no-data">오늘 일정이 없습니다.</div>'; return; }
   items.forEach(evt => {
     const item = document.createElement('div');
@@ -278,10 +333,7 @@ function renderDashboardQuickLinks() {
     const a = document.createElement('button');
     a.className = 'quick-link-btn';
     a.innerHTML = `<div class="quick-link-title"><i class="fa-solid fa-star"></i>${escapeHTML(n.title || '제목 없음')}</div><div class="quick-link-cat">${escapeHTML(n.category || '메모')}</div>`;
-    a.addEventListener('click', () => {
-      document.querySelector('.nav-btn[data-tab="notes"]')?.click();
-      selectNote(n.id);
-    });
+    a.addEventListener('click', () => { document.querySelector('.nav-btn[data-tab="notes"]')?.click(); selectNote(n.id); });
     el.appendChild(a);
   });
 }
@@ -293,6 +345,9 @@ function openDdayModal() {
   openModal(document.getElementById('modal-dday'));
 }
 
+// =====================================================
+// CALENDAR
+// =====================================================
 function ensureEventTimeFields() {
   if (document.getElementById('event-start-time')) return;
   const startDateInput = document.getElementById('event-start-date');
@@ -329,7 +384,7 @@ function initCalendar() {
     if (!title) return alert('일정 제목을 입력해주세요.');
     if (startDate > endDate) return alert('종료일은 시작일보다 빠를 수 없습니다.');
     if (startDate === endDate && startTime && endTime && endTime < startTime) return alert('같은 날짜에서는 종료시간이 시작시간보다 빠를 수 없습니다.');
-    const eventData = { id: id || 'evt_' + Date.now(), title, startDate, endDate, startTime, endTime, color, desc };
+    const eventData = { id: id || 'evt_' + Date.now(), title, startDate, endDate, startTime, endTime, color, desc, updatedAt: new Date().toISOString() };
     const idx = state.events.findIndex(x => x.id === id);
     if (idx >= 0) state.events[idx] = eventData; else state.events.push(eventData);
     saveDataToStorage(); renderDashboard(); renderCalendar(); closeModal(document.getElementById('modal-event'));
@@ -372,16 +427,18 @@ function renderCalendar() {
     if (cell.isOtherMonth) cellEl.classList.add('other-month');
     if (cell.dateStr === today) cellEl.classList.add('today');
     cellEl.innerHTML = `<span class="cell-num">${cell.day}</span><div class="cell-events"></div>`;
-    const eventsContainer = cellEl.querySelector('.cell-events');
-    state.events.filter(e => isDateInRange(cell.dateStr, e.startDate, e.endDate)).sort((a,b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99')).forEach(evt => {
-      const badge = document.createElement('div');
-      badge.className = 'event-badge';
-      badge.style.backgroundColor = evt.color || '#3498db';
-      badge.textContent = `${formatEventTime(evt)}${evt.title}`;
-      badge.title = badge.textContent;
-      badge.addEventListener('click', ev => { ev.stopPropagation(); openEventModal(evt); });
-      eventsContainer.appendChild(badge);
-    });
+    const container = cellEl.querySelector('.cell-events');
+    state.events.filter(e => isDateInRange(cell.dateStr, e.startDate, e.endDate))
+      .sort((a,b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99'))
+      .forEach(evt => {
+        const badge = document.createElement('div');
+        badge.className = 'event-badge';
+        badge.style.backgroundColor = evt.color || '#3498db';
+        badge.textContent = `${formatEventTime(evt)}${evt.title}`;
+        badge.title = badge.textContent;
+        badge.addEventListener('click', ev => { ev.stopPropagation(); openEventModal(evt); });
+        container.appendChild(badge);
+      });
     cellEl.addEventListener('click', () => openEventModal(null, cell.dateStr));
     grid.appendChild(cellEl);
   });
@@ -419,14 +476,16 @@ function openEventModal(eventObj = null, defaultDateStr = null) {
   openModal(document.getElementById('modal-event'));
 }
 
+// =====================================================
+// TODOS
+// =====================================================
 function initTodos() {
-  const form = document.getElementById('todo-form');
-  form?.addEventListener('submit', e => {
+  document.getElementById('todo-form')?.addEventListener('submit', e => {
     e.preventDefault();
     const input = document.getElementById('todo-input');
     const text = input.value.trim();
     if (!text) return;
-    state.todos.push({ id: 'todo_' + Date.now(), text, priority: document.getElementById('todo-priority').value, duedate: document.getElementById('todo-duedate').value, completed: false });
+    state.todos.push({ id: 'todo_' + Date.now(), text, priority: document.getElementById('todo-priority').value, duedate: document.getElementById('todo-duedate').value, completed: false, updatedAt: new Date().toISOString() });
     input.value = ''; document.getElementById('todo-duedate').value = '';
     saveDataToStorage(); renderTodoList(); renderDashboard();
   });
@@ -450,12 +509,15 @@ function renderTodoList() {
     const item = document.createElement('div');
     item.className = 'todo-item' + (t.completed ? ' completed' : '');
     item.innerHTML = `<div class="todo-item-left"><label class="todo-checkbox-wrapper"><input type="checkbox" ${t.completed ? 'checked' : ''}><span class="todo-checkmark"></span></label><div class="todo-details"><div class="todo-text">${escapeHTML(t.text)}</div><div class="todo-meta"><span class="todo-priority-badge priority-${t.priority || 'medium'}">${labels[t.priority] || '보통'}</span>${t.duedate ? `<span class="todo-due-meta"><i class="fa-regular fa-calendar"></i>${escapeHTML(t.duedate)}</span>` : ''}</div></div></div><div class="todo-actions"><button class="btn-todo-action btn-todo-delete"><i class="fa-solid fa-trash"></i></button></div>`;
-    item.querySelector('input').addEventListener('change', e => { t.completed = e.target.checked; saveDataToStorage(); renderTodoList(); renderDashboard(); });
+    item.querySelector('input').addEventListener('change', e => { t.completed = e.target.checked; t.updatedAt = new Date().toISOString(); saveDataToStorage(); renderTodoList(); renderDashboard(); });
     item.querySelector('.btn-todo-delete').addEventListener('click', () => { state.todos = state.todos.filter(x => x.id !== t.id); saveDataToStorage(); renderTodoList(); renderDashboard(); });
     el.appendChild(item);
   });
 }
 
+// =====================================================
+// NOTES
+// =====================================================
 function initNotes() {
   document.getElementById('btn-new-note')?.addEventListener('click', createNewNote);
   document.getElementById('btn-save-note')?.addEventListener('click', saveActiveNote);
@@ -528,14 +590,32 @@ function renderNotesList() {
   });
 }
 
+// =====================================================
+// SAFE CLOUD SYNC
+// =====================================================
 function ensureMobileSyncStatusBox() {
   let box = document.getElementById('mobile-sync-status-box');
   if (box) return box;
   box = document.createElement('div');
   box.id = 'mobile-sync-status-box';
   box.className = 'sync-status offline';
-  box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;border-radius:0;padding:10px 14px;background:rgba(15,12,32,.95);border-top:1px solid rgba(255,255,255,.12);font-size:12px;display:flex;gap:8px;align-items:center;';
-  box.innerHTML = '<i class="fa-solid fa-circle"></i><span id="mobile-sync-status-text">로컬 모드 | 설정에서 PAT/Gist ID 입력 필요</span><button id="mobile-sync-status-close" style="margin-left:auto;background:transparent;border:0;color:inherit;font-size:16px;cursor:pointer">×</button>';
+  box.style.cssText = [
+    'position:fixed',
+    'left:0',
+    'right:0',
+    'top:0',
+    'z-index:99999',
+    'border-radius:0',
+    'padding:calc(8px + env(safe-area-inset-top)) 14px 8px 14px',
+    'background:rgba(15,12,32,.96)',
+    'border-bottom:1px solid rgba(255,255,255,.14)',
+    'font-size:12px',
+    'display:none',
+    'gap:8px',
+    'align-items:center',
+    'box-shadow:0 6px 18px rgba(0,0,0,.35)'
+  ].join(';');
+  box.innerHTML = '<i class="fa-solid fa-circle"></i><span id="mobile-sync-status-text">로컬 모드</span><button id="mobile-sync-status-close" style="margin-left:auto;background:transparent;border:0;color:inherit;font-size:18px;line-height:1;cursor:pointer">×</button>';
   document.body.appendChild(box);
   document.getElementById('mobile-sync-status-close')?.addEventListener('click', () => box.style.display = 'none');
   return box;
@@ -548,7 +628,37 @@ function setMobileSyncStatus(message, mode = 'offline', autoHide = true) {
   box.className = `sync-status ${mode}`;
   box.style.display = 'flex';
   text.textContent = message;
-  if (autoHide && mode === 'online') setTimeout(() => { box.style.display = 'none'; }, 4000);
+  if (autoHide && mode === 'online') setTimeout(() => { box.style.display = 'none'; }, 3500);
+}
+
+function makeSyncButton(id, cls, icon, text) {
+  let btn = document.getElementById(id);
+  if (btn) return btn;
+  btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = id;
+  btn.className = cls;
+  btn.innerHTML = `<i class="${icon}"></i> ${text}`;
+  return btn;
+}
+
+function ensureManualSyncButtons() {
+  const box = document.querySelector('.sync-actions-box');
+  if (!box) return;
+  const syncNowBtn = document.getElementById('btn-sync-now');
+  const downloadBtn = makeSyncButton('btn-cloud-download', 'btn btn-secondary hidden', 'fa-solid fa-cloud-arrow-down', '클라우드 불러오기');
+  const uploadBtn = makeSyncButton('btn-cloud-upload', 'btn btn-success hidden', 'fa-solid fa-cloud-arrow-up', '클라우드 업로드');
+  if (!document.getElementById('btn-cloud-download')) box.appendChild(downloadBtn);
+  if (!document.getElementById('btn-cloud-upload')) box.appendChild(uploadBtn);
+  if (syncNowBtn) syncNowBtn.innerHTML = '<i class="fa-solid fa-rotate"></i> 병합 동기화';
+  downloadBtn.addEventListener('click', downloadFromCloud, { once: false });
+  uploadBtn.addEventListener('click', uploadToCloud, { once: false });
+}
+
+function getSavedPatOrInput() {
+  const patInput = document.getElementById('github-pat');
+  const saved = typeof GithubSync !== 'undefined' ? GithubSync.getSettings().pat : '';
+  return (patInput?.value || '').trim() || saved || '';
 }
 
 function initSettings() {
@@ -567,31 +677,50 @@ function initSettings() {
     reader.readAsText(file);
   });
 
+  ensureManualSyncButtons();
+
   const patInput = document.getElementById('github-pat');
   const gistIdInput = document.getElementById('github-gist-id');
   const syncNowBtn = document.getElementById('btn-sync-now');
   const syncForm = document.getElementById('github-sync-form');
+  const downloadBtn = document.getElementById('btn-cloud-download');
+  const uploadBtn = document.getElementById('btn-cloud-upload');
+
+  if (patInput) {
+    patInput.setAttribute('autocomplete', 'new-password');
+    patInput.setAttribute('autocapitalize', 'off');
+    patInput.setAttribute('spellcheck', 'false');
+  }
 
   if (typeof GithubSync !== 'undefined') {
     const settings = GithubSync.getSettings();
-    if (patInput && settings.pat) patInput.value = settings.pat;
+    if (patInput && settings.pat) {
+      patInput.value = settings.pat;
+      patInput.placeholder = '저장된 PAT 사용 중';
+    }
     if (gistIdInput && settings.gistId) gistIdInput.value = settings.gistId;
-    if (syncNowBtn && settings.pat) syncNowBtn.classList.remove('hidden');
+    const configured = !!settings.pat;
+    [syncNowBtn, downloadBtn, uploadBtn].forEach(btn => btn && btn.classList.toggle('hidden', !configured));
   }
 
-  if (syncForm && !syncForm.dataset.finalSyncPatch) {
-    syncForm.dataset.finalSyncPatch = '1';
+  if (syncForm && !syncForm.dataset.finalSafeSync) {
+    syncForm.dataset.finalSafeSync = '1';
     syncForm.addEventListener('submit', e => {
       e.preventDefault();
-      const patVal = patInput ? patInput.value.trim() : '';
-      const gistIdVal = gistIdInput ? gistIdInput.value.trim() : '';
-      if (!patVal) return alert('GitHub PAT를 입력해주세요.');
       if (typeof GithubSync === 'undefined') return alert('github-sync.js가 로드되지 않았습니다.');
+      const existing = GithubSync.getSettings();
+      const patVal = (patInput?.value || '').trim() || existing.pat;
+      const gistIdVal = (gistIdInput?.value || '').trim() || existing.gistId;
+      if (!patVal) return alert('GitHub PAT를 입력해주세요.');
       GithubSync.saveSettings(patVal, gistIdVal);
-      if (syncNowBtn) syncNowBtn.classList.remove('hidden');
+      [syncNowBtn, downloadBtn, uploadBtn].forEach(btn => btn && btn.classList.remove('hidden'));
+      if (patInput) {
+        patInput.value = patVal;
+        patInput.placeholder = '저장된 PAT 사용 중';
+      }
       updateSyncIndicator(); renderSyncLogBox();
-      setMobileSyncStatus('설정 저장 완료 | 동기화 버튼을 눌러주세요', 'online');
-      alert('동기화 설정이 저장되었습니다. 이제 지금 동기화를 눌러주세요.');
+      setMobileSyncStatus('설정 저장 완료 | 불러오기 또는 업로드를 선택하세요', 'online');
+      alert('동기화 설정이 저장되었습니다. 이제 클라우드 불러오기 또는 클라우드 업로드를 선택하세요.');
     }, true);
   }
 
@@ -600,24 +729,95 @@ function initSettings() {
   renderSyncLogBox();
 }
 
+function assertCloudReady() {
+  if (typeof GithubSync === 'undefined') throw new Error('github-sync.js가 로드되지 않았습니다.');
+  const pat = getSavedPatOrInput();
+  const gistId = document.getElementById('github-gist-id')?.value.trim() || GithubSync.getSettings().gistId;
+  if (!pat) throw new Error('PAT가 저장되지 않았습니다.');
+  GithubSync.saveSettings(pat, gistId);
+}
+
+async function downloadFromCloud() {
+  const btn = document.getElementById('btn-cloud-download');
+  try {
+    assertCloudReady();
+    btn && (btn.disabled = true);
+    updateSyncIndicator('syncing');
+    setMobileSyncStatus('클라우드에서 불러오는 중...', 'syncing', false);
+    const remoteData = await GithubSync.downloadData();
+    if (!remoteData || countAppData(remoteData) === 0) throw new Error('클라우드에 불러올 데이터가 없습니다.');
+    restoreFullAppState(remoteData);
+    localStorage.setItem(GithubSync.KEYS.LAST_SYNC, new Date().toISOString());
+    updateSyncIndicator('online'); renderSyncLogBox();
+    setMobileSyncStatus('클라우드 불러오기 완료', 'online');
+    alert('클라우드 데이터를 이 기기로 불러왔습니다.');
+  } catch (err) {
+    console.error(err);
+    updateSyncIndicator('offline');
+    setMobileSyncStatus('불러오기 실패 | ' + err.message, 'offline', false);
+    alert('클라우드 불러오기 실패: ' + err.message);
+  } finally {
+    btn && (btn.disabled = false);
+  }
+}
+
+async function uploadToCloud() {
+  const btn = document.getElementById('btn-cloud-upload');
+  try {
+    assertCloudReady();
+    btn && (btn.disabled = true);
+    updateSyncIndicator('syncing');
+    setMobileSyncStatus('클라우드에 업로드 중...', 'syncing', false);
+    const localData = getFullAppState();
+    const localCount = countAppData(localData);
+    let remoteCount = 0;
+    try {
+      const remoteData = await GithubSync.downloadData();
+      remoteCount = countAppData(remoteData);
+    } catch (e) {
+      remoteCount = 0;
+    }
+    if (localCount === 0 && remoteCount > 0) {
+      throw new Error('현재 기기 데이터가 비어 있어 업로드를 차단했습니다. 먼저 클라우드 불러오기를 해주세요.');
+    }
+    await GithubSync.uploadData(localData);
+    localStorage.setItem(GithubSync.KEYS.LAST_SYNC, new Date().toISOString());
+    updateSyncIndicator('online'); renderSyncLogBox();
+    setMobileSyncStatus('클라우드 업로드 완료', 'online');
+    alert('현재 기기 데이터를 클라우드에 업로드했습니다.');
+  } catch (err) {
+    console.error(err);
+    updateSyncIndicator('offline');
+    setMobileSyncStatus('업로드 실패 | ' + err.message, 'offline', false);
+    alert('클라우드 업로드 실패: ' + err.message);
+  } finally {
+    btn && (btn.disabled = false);
+  }
+}
+
 async function executeGitHubSync() {
   const syncNowBtn = document.getElementById('btn-sync-now');
   try {
-    if (typeof GithubSync === 'undefined') throw new Error('github-sync.js가 로드되지 않았습니다.');
-    if (!GithubSync.isConfigured()) throw new Error('PAT가 저장되지 않았습니다. 설정 및 동기화에서 PAT를 입력한 뒤 설정 저장 및 연결을 눌러주세요.');
+    assertCloudReady();
     syncNowBtn && (syncNowBtn.disabled = true);
-    setMobileSyncStatus('동기화 중...', 'syncing', false);
     updateSyncIndicator('syncing');
+    setMobileSyncStatus('병합 동기화 중...', 'syncing', false);
     const localData = getFullAppState();
     const remoteData = await GithubSync.downloadData();
-    let finalData = localData;
-    if (remoteData && countAppData(remoteData) > countAppData(localData)) finalData = remoteData;
+    let finalData;
+    if (!remoteData || countAppData(remoteData) === 0) {
+      finalData = localData;
+    } else if (countAppData(localData) === 0) {
+      finalData = remoteData;
+    } else {
+      finalData = mergeAppData(localData, remoteData);
+    }
     restoreFullAppState(finalData);
     await GithubSync.uploadData(getFullAppState());
     localStorage.setItem(GithubSync.KEYS.LAST_SYNC, new Date().toISOString());
     updateSyncIndicator('online'); renderSyncLogBox();
-    setMobileSyncStatus('동기화 완료', 'online');
-    alert('동기화가 완료되었습니다.');
+    setMobileSyncStatus('병합 동기화 완료', 'online');
+    alert('병합 동기화가 완료되었습니다.');
   } catch (err) {
     console.error(err);
     updateSyncIndicator('offline');

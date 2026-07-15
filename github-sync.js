@@ -1,6 +1,6 @@
 /**
- * GitHub Gist Sync Module - Final robust version
- * Stores PAT/Gist ID in browser localStorage and syncs scheduler data with a Secret Gist.
+ * GitHub Gist Sync Module - FINAL SAFE VERSION
+ * Uses GitHub Secret Gist as lightweight cloud DB.
  */
 const GithubSync = {
   KEYS: {
@@ -9,7 +9,7 @@ const GithubSync = {
     LAST_SYNC: 'gs_last_sync_time'
   },
   FILE_NAME: 'scheduler-data.json',
-  LEGACY_FILE_NAMES: ['g-scheduler-data.json', 'gscheduler-data.json'],
+  LEGACY_FILE_NAMES: ['g-scheduler-data.json', 'gscheduler-data.json', 'G-Scheduler Sync Data.json'],
   GIST_DESCRIPTION: 'G-Scheduler Sync Data',
 
   getSettings() {
@@ -20,8 +20,8 @@ const GithubSync = {
   },
 
   saveSettings(pat, gistId = '') {
-    if (pat) localStorage.setItem(this.KEYS.PAT, pat.trim());
-    if (gistId) localStorage.setItem(this.KEYS.GIST_ID, gistId.trim());
+    if (pat && String(pat).trim()) localStorage.setItem(this.KEYS.PAT, String(pat).trim());
+    if (gistId && String(gistId).trim()) localStorage.setItem(this.KEYS.GIST_ID, String(gistId).trim());
   },
 
   clearSettings() {
@@ -31,8 +31,7 @@ const GithubSync = {
   },
 
   isConfigured() {
-    const s = this.getSettings();
-    return !!s.pat;
+    return !!this.getSettings().pat;
   },
 
   async request(url, options = {}) {
@@ -63,8 +62,7 @@ const GithubSync = {
     for (const name of this.LEGACY_FILE_NAMES) {
       if (gist.files[name]) return gist.files[name];
     }
-    const jsonFile = Object.values(gist.files).find(f => f.filename && f.filename.endsWith('.json'));
-    return jsonFile || null;
+    return Object.values(gist.files).find(f => f.filename && f.filename.toLowerCase().endsWith('.json')) || null;
   },
 
   async createGist(data) {
@@ -72,9 +70,7 @@ const GithubSync = {
       description: this.GIST_DESCRIPTION,
       public: false,
       files: {
-        [this.FILE_NAME]: {
-          content: JSON.stringify(data || {}, null, 2)
-        }
+        [this.FILE_NAME]: { content: JSON.stringify(data || {}, null, 2) }
       }
     };
     const gist = await this.request('https://api.github.com/gists', {
@@ -82,7 +78,7 @@ const GithubSync = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    if (gist && gist.id) localStorage.setItem(this.KEYS.GIST_ID, gist.id);
+    if (gist?.id) localStorage.setItem(this.KEYS.GIST_ID, gist.id);
     return gist;
   },
 
@@ -99,26 +95,19 @@ const GithubSync = {
     const file = this.findDataFile(gist);
     if (!file || !file.content) return null;
     try {
-      const data = JSON.parse(file.content);
-      return data;
-    } catch (e) {
+      return JSON.parse(file.content);
+    } catch {
       throw new Error('Gist 데이터 JSON 파싱 실패');
     }
   },
 
   async uploadData(data) {
-    let { gistId } = this.getSettings();
-    if (!gistId) {
-      const gist = await this.createGist(data);
-      gistId = gist.id;
-      return gist;
-    }
+    const { gistId } = this.getSettings();
+    if (!gistId) return await this.createGist(data);
     const body = {
       description: this.GIST_DESCRIPTION,
       files: {
-        [this.FILE_NAME]: {
-          content: JSON.stringify(data || {}, null, 2)
-        }
+        [this.FILE_NAME]: { content: JSON.stringify(data || {}, null, 2) }
       }
     };
     return await this.request(`https://api.github.com/gists/${gistId}`, {
@@ -133,23 +122,8 @@ const AutoSync = {
   _uploadTimer: null,
   _debounceMs: 2000,
   _isSyncing: false,
-
-  scheduleUpload(data) {
-    if (this._uploadTimer) clearTimeout(this._uploadTimer);
-    this._uploadTimer = setTimeout(async () => {
-      if (this._isSyncing) return;
-      if (typeof GithubSync === 'undefined' || !GithubSync.isConfigured()) return;
-      try {
-        this._isSyncing = true;
-        await GithubSync.uploadData(data);
-        localStorage.setItem(GithubSync.KEYS.LAST_SYNC, new Date().toISOString());
-        if (typeof updateSyncIndicator === 'function') updateSyncIndicator('online');
-        if (typeof renderSyncLogBox === 'function') renderSyncLogBox();
-      } catch (e) {
-        console.warn('자동 동기화 실패:', e);
-      } finally {
-        this._isSyncing = false;
-      }
-    }, this._debounceMs);
+  scheduleUpload() {
+    // 안전 동기화 버전에서는 자동 업로드를 비활성화합니다.
+    // 데이터 꼬임 방지를 위해 사용자가 [클라우드 업로드]를 직접 누르는 구조입니다.
   }
 };
