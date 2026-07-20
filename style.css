@@ -670,10 +670,12 @@ body {
 
 .calendar-grid {
     display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    grid-auto-rows: minmax(80px, 1fr);
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-rows: repeat(6, minmax(82px, 1fr));
     flex-grow: 1;
+    min-height: 0;
     margin-top: 1px;
+    overflow: hidden;
 }
 
 .calendar-cell {
@@ -686,11 +688,16 @@ body {
     cursor: pointer;
     transition: background var(--transition-fast);
     position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .calendar-cell:nth-child(7n) { border-right: none; }
-.calendar-cell:nth-child(7n+1) .cell-num { color: var(--color-danger); }
-.calendar-cell:nth-child(7n) .cell-num { color: var(--color-info); }
+.calendar-cell:nth-child(7n+1) .cell-num,
+.calendar-cell:nth-child(7n+1) .cell-weekday { color: var(--color-danger); }
+.calendar-cell:nth-child(7n) .cell-num,
+.calendar-cell:nth-child(7n) .cell-weekday { color: var(--color-info); }
 
 .calendar-cell:hover {
     background: rgba(255, 255, 255, 0.02);
@@ -715,10 +722,27 @@ body {
     background-color: var(--color-primary);
 }
 
+.cell-date-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
 .cell-num {
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
     align-self: flex-start;
+}
+
+.cell-weekday {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
 }
 
 .cell-events {
@@ -726,7 +750,9 @@ body {
     flex-direction: column;
     gap: 2px;
     overflow-y: auto;
-    max-height: 70px;
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
     scrollbar-width: none; /* Hide scrollbar for grid cells */
 }
 
@@ -1033,6 +1059,10 @@ textarea:focus {
 
 .btn-todo-action:hover {
     background: rgba(255, 255, 255, 0.05);
+}
+
+.btn-todo-edit:hover {
+    color: var(--color-primary);
 }
 
 .btn-todo-delete:hover {

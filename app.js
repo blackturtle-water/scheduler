@@ -25,6 +25,7 @@ const STORAGE_KEYS = {
 
 let todoFilter = 'all';
 let activeNoteId = null;
+let editingTodoId = null;
 
 // =====================================================
 // BASIC UTILITIES
@@ -409,15 +410,21 @@ function renderCalendar() {
   const firstDayIndex = new Date(year, month, 1).getDay();
   const lastDay = new Date(year, month + 1, 0).getDate();
   const prevLastDay = new Date(year, month, 0).getDate();
+  const weekdayLabels = ['일', '월', '화', '수', '목', '금', '토'];
   const cells = [];
   for (let x = firstDayIndex; x > 0; x--) {
     const day = prevLastDay - x + 1;
-    cells.push({ day, dateStr: getLocalDateString(new Date(year, month - 1, day)), isOtherMonth: true });
+    const dateObj = new Date(year, month - 1, day);
+    cells.push({ day, dateStr: getLocalDateString(dateObj), weekday: weekdayLabels[dateObj.getDay()], isOtherMonth: true });
   }
-  for (let i = 1; i <= lastDay; i++) cells.push({ day: i, dateStr: getLocalDateString(new Date(year, month, i)), isOtherMonth: false });
+  for (let i = 1; i <= lastDay; i++) {
+    const dateObj = new Date(year, month, i);
+    cells.push({ day: i, dateStr: getLocalDateString(dateObj), weekday: weekdayLabels[dateObj.getDay()], isOtherMonth: false });
+  }
   while (cells.length < 42) {
     const day = cells.length - firstDayIndex - lastDay + 1;
-    cells.push({ day, dateStr: getLocalDateString(new Date(year, month + 1, day)), isOtherMonth: true });
+    const dateObj = new Date(year, month + 1, day);
+    cells.push({ day, dateStr: getLocalDateString(dateObj), weekday: weekdayLabels[dateObj.getDay()], isOtherMonth: true });
   }
   const today = getLocalDateString(new Date());
   state.events = state.events.map(migrateEventTimeFields);
@@ -426,7 +433,7 @@ function renderCalendar() {
     cellEl.className = 'calendar-cell';
     if (cell.isOtherMonth) cellEl.classList.add('other-month');
     if (cell.dateStr === today) cellEl.classList.add('today');
-    cellEl.innerHTML = `<span class="cell-num">${cell.day}</span><div class="cell-events"></div>`;
+    cellEl.innerHTML = `<div class="cell-date-header"><span class="cell-num">${cell.day}</span><span class="cell-weekday">${cell.weekday}</span></div><div class="cell-events"></div>`;
     const container = cellEl.querySelector('.cell-events');
     state.events.filter(e => isDateInRange(cell.dateStr, e.startDate, e.endDate))
       .sort((a,b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99'))
@@ -479,14 +486,57 @@ function openEventModal(eventObj = null, defaultDateStr = null) {
 // =====================================================
 // TODOS
 // =====================================================
+function setTodoFormMode(mode = 'add') {
+  const cardTitle = document.querySelector('.todo-sidebar-card h3');
+  const submitBtn = document.querySelector('#todo-form button[type="submit"]');
+  if (mode === 'edit') {
+    if (cardTitle) cardTitle.textContent = '할 일 수정';
+    if (submitBtn) submitBtn.textContent = '수정 완료';
+  } else {
+    editingTodoId = null;
+    if (cardTitle) cardTitle.textContent = '새 할 일 추가';
+    if (submitBtn) submitBtn.textContent = '추가하기';
+  }
+}
+
+function startEditTodo(todoId) {
+  const todo = state.todos.find(t => t.id === todoId);
+  if (!todo) return;
+  editingTodoId = todo.id;
+  document.getElementById('todo-input').value = todo.text || '';
+  document.getElementById('todo-priority').value = todo.priority || 'medium';
+  document.getElementById('todo-duedate').value = todo.duedate || '';
+  setTodoFormMode('edit');
+  document.querySelector('.todo-sidebar-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  document.getElementById('todo-input')?.focus();
+}
+
 function initTodos() {
-  document.getElementById('todo-form')?.addEventListener('submit', e => {
+  const form = document.getElementById('todo-form');
+  form?.addEventListener('submit', e => {
     e.preventDefault();
     const input = document.getElementById('todo-input');
     const text = input.value.trim();
     if (!text) return;
-    state.todos.push({ id: 'todo_' + Date.now(), text, priority: document.getElementById('todo-priority').value, duedate: document.getElementById('todo-duedate').value, completed: false, updatedAt: new Date().toISOString() });
-    input.value = ''; document.getElementById('todo-duedate').value = '';
+    const priority = document.getElementById('todo-priority').value;
+    const duedate = document.getElementById('todo-duedate').value;
+
+    if (editingTodoId) {
+      const todo = state.todos.find(t => t.id === editingTodoId);
+      if (todo) {
+        todo.text = text;
+        todo.priority = priority;
+        todo.duedate = duedate;
+        todo.updatedAt = new Date().toISOString();
+      }
+    } else {
+      state.todos.push({ id: 'todo_' + Date.now(), text, priority, duedate, completed: false, updatedAt: new Date().toISOString() });
+    }
+
+    input.value = '';
+    document.getElementById('todo-priority').value = 'medium';
+    document.getElementById('todo-duedate').value = '';
+    setTodoFormMode('add');
     saveDataToStorage(); renderTodoList(); renderDashboard();
   });
   document.querySelectorAll('.filter-btn').forEach(btn => btn.addEventListener('click', () => {
@@ -508,9 +558,10 @@ function renderTodoList() {
   list.forEach(t => {
     const item = document.createElement('div');
     item.className = 'todo-item' + (t.completed ? ' completed' : '');
-    item.innerHTML = `<div class="todo-item-left"><label class="todo-checkbox-wrapper"><input type="checkbox" ${t.completed ? 'checked' : ''}><span class="todo-checkmark"></span></label><div class="todo-details"><div class="todo-text">${escapeHTML(t.text)}</div><div class="todo-meta"><span class="todo-priority-badge priority-${t.priority || 'medium'}">${labels[t.priority] || '보통'}</span>${t.duedate ? `<span class="todo-due-meta"><i class="fa-regular fa-calendar"></i>${escapeHTML(t.duedate)}</span>` : ''}</div></div></div><div class="todo-actions"><button class="btn-todo-action btn-todo-delete"><i class="fa-solid fa-trash"></i></button></div>`;
+    item.innerHTML = `<div class="todo-item-left"><label class="todo-checkbox-wrapper"><input type="checkbox" ${t.completed ? 'checked' : ''}><span class="todo-checkmark"></span></label><div class="todo-details"><div class="todo-text">${escapeHTML(t.text)}</div><div class="todo-meta"><span class="todo-priority-badge priority-${t.priority || 'medium'}">${labels[t.priority] || '보통'}</span>${t.duedate ? `<span class="todo-due-meta"><i class="fa-regular fa-calendar"></i>${escapeHTML(t.duedate)}</span>` : ''}</div></div></div><div class="todo-actions"><button class="btn-todo-action btn-todo-edit" title="수정"><i class="fa-solid fa-pen"></i></button><button class="btn-todo-action btn-todo-delete" title="삭제"><i class="fa-solid fa-trash"></i></button></div>`;
     item.querySelector('input').addEventListener('change', e => { t.completed = e.target.checked; t.updatedAt = new Date().toISOString(); saveDataToStorage(); renderTodoList(); renderDashboard(); });
-    item.querySelector('.btn-todo-delete').addEventListener('click', () => { state.todos = state.todos.filter(x => x.id !== t.id); saveDataToStorage(); renderTodoList(); renderDashboard(); });
+    item.querySelector('.btn-todo-edit').addEventListener('click', () => startEditTodo(t.id));
+    item.querySelector('.btn-todo-delete').addEventListener('click', () => { state.todos = state.todos.filter(x => x.id !== t.id); if (editingTodoId === t.id) setTodoFormMode('add'); saveDataToStorage(); renderTodoList(); renderDashboard(); });
     el.appendChild(item);
   });
 }
