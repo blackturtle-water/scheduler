@@ -1901,3 +1901,167 @@ textarea:focus {
 ::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.15);
 }
+
+/* =====================================================
+   PATCH 20260729: calendar search, holidays, week-row auto height, colors
+   ===================================================== */
+.calendar-header {
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.calendar-actions {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.calendar-search-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 220px;
+  max-width: 340px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 0 10px;
+  color: var(--text-secondary);
+}
+.calendar-search-wrap:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.14);
+}
+.calendar-search-wrap input {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 9px 2px !important;
+  min-width: 120px;
+}
+#calendar-search-clear {
+  border: 0;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  line-height: 18px;
+  font-size: 16px;
+}
+#calendar-search-clear:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.14);
+}
+.calendar-search-results {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.calendar-search-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.calendar-search-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  max-height: 170px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.calendar-search-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-primary);
+  border-radius: 10px;
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+.calendar-search-item:hover {
+  background: rgba(129, 140, 248, 0.10);
+  border-color: rgba(129, 140, 248, 0.30);
+}
+.calendar-search-color {
+  width: 11px;
+  height: 34px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+.calendar-search-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.calendar-search-main strong,
+.calendar-search-main small {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.calendar-search-main small,
+.calendar-search-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Important: rows grow by week only. A tall date expands its week row, not all month rows. */
+.calendar-container {
+  overflow: auto;
+}
+.calendar-grid {
+  display: grid !important;
+  grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+  grid-template-rows: none !important;
+  grid-auto-rows: minmax(92px, auto) !important;
+  align-items: stretch !important;
+  overflow: visible !important;
+  min-height: auto !important;
+}
+.calendar-cell {
+  min-height: 92px !important;
+  height: auto !important;
+  overflow: visible !important;
+}
+.cell-events {
+  max-height: none !important;
+  overflow: visible !important;
+}
+.event-badge {
+  line-height: 1.25;
+}
+.holiday-badge {
+  background: linear-gradient(135deg, #ff7675, #d63031) !important;
+  color: #fff !important;
+  border: 1px solid rgba(255,255,255,0.18);
+}
+
+@media (max-width: 768px) {
+  .calendar-header {
+    align-items: stretch;
+  }
+  .calendar-actions {
+    width: 100%;
+  }
+  .calendar-search-wrap {
+    width: 100%;
+    max-width: none;
+  }
+  .calendar-grid {
+    grid-auto-rows: minmax(82px, auto) !important;
+  }
+  .calendar-cell {
+    min-height: 82px !important;
+    padding: 6px !important;
+  }
+  .cell-weekday {
+    display: none;
+  }
+}

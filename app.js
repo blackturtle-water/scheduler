@@ -906,3 +906,366 @@ function renderSyncLogBox() {
     lastSyncTimeEl.textContent = last ? new Date(last).toLocaleString('ko-KR') : '없음';
   }
 }
+
+// =====================================================
+// PATCH 20260729: Calendar search, Korean holidays, row-height fix support, expanded colors
+// =====================================================
+const EVENT_COLOR_OPTIONS_V2 = [
+  ['#3498db', '파란색'], ['#2ecc71', '녹색'], ['#e74c3c', '빨간색'], ['#f1c40f', '노란색'], ['#9b59b6', '보라색'],
+  ['#1abc9c', '민트'], ['#e67e22', '주황색'], ['#34495e', '남색'], ['#ff6b81', '핑크'], ['#00b894', '청록'],
+  ['#6c5ce7', '인디고'], ['#fd79a8', '라즈베리'], ['#00cec9', '터쿼이즈'], ['#d63031', '진홍'], ['#0984e3', '스카이블루'],
+  ['#b2bec3', '회색'], ['#2d3436', '차콜'], ['#fab1a0', '살구'], ['#55efc4', '라이트민트'], ['#a29bfe', '라벤더']
+];
+
+let calendarSearchQuery = '';
+const HOLIDAY_CACHE_KEY = 'gs_kr_holidays_cache_v2';
+let krHolidayMap = {};
+let holidayLoadStarted = false;
+
+function ensureEventColorOptionsV2() {
+  const select = document.getElementById('event-color');
+  if (!select || select.dataset.extendedColors === '1') return;
+  const current = select.value || '#3498db';
+  select.innerHTML = '';
+  EVENT_COLOR_OPTIONS_V2.forEach(([value, label]) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    opt.style.backgroundColor = value;
+    opt.style.color = isLightColor(value) ? '#111' : '#fff';
+    select.appendChild(opt);
+  });
+  select.value = EVENT_COLOR_OPTIONS_V2.some(([v]) => v === current) ? current : '#3498db';
+  select.dataset.extendedColors = '1';
+}
+
+function isLightColor(hex) {
+  const c = String(hex || '').replace('#', '');
+  if (c.length !== 6) return false;
+  const r = parseInt(c.slice(0, 2), 16);
+  const g = parseInt(c.slice(2, 4), 16);
+  const b = parseInt(c.slice(4, 6), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000 > 155;
+}
+
+function ensureCalendarSearchUI() {
+  const actions = document.querySelector('.calendar-actions');
+  const calendarContainer = document.querySelector('.calendar-container');
+  if (!actions || !calendarContainer) return;
+
+  if (!document.getElementById('calendar-search-wrap')) {
+    const wrap = document.createElement('div');
+    wrap.id = 'calendar-search-wrap';
+    wrap.className = 'calendar-search-wrap';
+    wrap.innerHTML = `
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input type="search" id="calendar-search-input" placeholder="일정 검색" autocomplete="off">
+      <button type="button" id="calendar-search-clear" title="검색 초기화">×</button>
+    `;
+    actions.insertBefore(wrap, actions.firstChild);
+
+    const input = wrap.querySelector('#calendar-search-input');
+    const clear = wrap.querySelector('#calendar-search-clear');
+    input.addEventListener('input', () => {
+      calendarSearchQuery = input.value.trim().toLowerCase();
+      renderCalendar();
+      renderCalendarSearchResults();
+    });
+    clear.addEventListener('click', () => {
+      input.value = '';
+      calendarSearchQuery = '';
+      renderCalendar();
+      renderCalendarSearchResults();
+      input.focus();
+    });
+  }
+
+  if (!document.getElementById('calendar-search-results')) {
+    const results = document.createElement('div');
+    results.id = 'calendar-search-results';
+    results.className = 'calendar-search-results hidden';
+    const header = calendarContainer.querySelector('.calendar-header');
+    header.insertAdjacentElement('afterend', results);
+  }
+}
+
+function eventMatchesSearch(evt) {
+  if (!calendarSearchQuery) return true;
+  const haystack = [
+    evt.title || '', evt.desc || '', evt.startDate || '', evt.endDate || '', evt.startTime || '', evt.endTime || ''
+  ].join(' ').toLowerCase();
+  return haystack.includes(calendarSearchQuery);
+}
+
+function getMatchingEventsForSearch() {
+  if (!calendarSearchQuery) return [];
+  return state.events
+    .map(migrateEventTimeFields)
+    .filter(eventMatchesSearch)
+    .sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.startTime || '99:99').localeCompare(b.startTime || '99:99'));
+}
+
+function renderCalendarSearchResults() {
+  const box = document.getElementById('calendar-search-results');
+  if (!box) return;
+  const matches = getMatchingEventsForSearch();
+  if (!calendarSearchQuery) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.remove('hidden');
+  if (!matches.length) {
+    box.innerHTML = `<div class="calendar-search-empty">검색 결과가 없습니다.</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="calendar-search-title">검색 결과 ${matches.length}건</div>
+    <div class="calendar-search-list"></div>
+  `;
+  const list = box.querySelector('.calendar-search-list');
+  matches.slice(0, 30).forEach(evt => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'calendar-search-item';
+    item.innerHTML = `
+      <span class="calendar-search-color" style="background:${evt.color || '#3498db'}"></span>
+      <span class="calendar-search-main">
+        <strong>${escapeHTML(evt.title || '제목 없음')}</strong>
+        <small>${escapeHTML(evt.startDate || '')}${evt.endDate && evt.endDate !== evt.startDate ? ' ~ ' + escapeHTML(evt.endDate) : ''} ${escapeHTML(formatEventTime(evt))}</small>
+      </span>
+    `;
+    item.addEventListener('click', () => {
+      const d = evt.startDate ? new Date(evt.startDate) : new Date();
+      if (!Number.isNaN(d.getTime())) state.currentDate = new Date(d.getFullYear(), d.getMonth(), 1);
+      renderCalendar();
+      openEventModal(evt);
+    });
+    list.appendChild(item);
+  });
+}
+
+function loadHolidayCache() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(HOLIDAY_CACHE_KEY) || '{}');
+    if (cached && cached.data) krHolidayMap = cached.data;
+  } catch {
+    krHolidayMap = {};
+  }
+}
+
+async function loadKoreanHolidays() {
+  if (holidayLoadStarted) return;
+  holidayLoadStarted = true;
+  loadHolidayCache();
+  try {
+    const res = await fetch('https://holidays.hyunbin.page/basic.json', { cache: 'force-cache' });
+    if (!res.ok) throw new Error('holiday fetch failed');
+    const data = await res.json();
+    const normalized = {};
+    Object.entries(data || {}).forEach(([date, value]) => {
+      normalized[date] = Array.isArray(value) ? value : [String(value)];
+    });
+    krHolidayMap = normalized;
+    localStorage.setItem(HOLIDAY_CACHE_KEY, JSON.stringify({ updatedAt: new Date().toISOString(), data: krHolidayMap }));
+    renderCalendar();
+  } catch (err) {
+    console.warn('공휴일 데이터를 불러오지 못했습니다. 기본 공휴일만 표시합니다.', err);
+    addFallbackFixedHolidaysForVisibleYear();
+    renderCalendar();
+  }
+}
+
+function addFallbackFixedHolidaysForVisibleYear() {
+  const y = state.currentDate.getFullYear();
+  const fixed = {
+    [`${y}-01-01`]: ['신정'],
+    [`${y}-03-01`]: ['삼일절'],
+    [`${y}-05-05`]: ['어린이날'],
+    [`${y}-06-06`]: ['현충일'],
+    [`${y}-08-15`]: ['광복절'],
+    [`${y}-10-03`]: ['개천절'],
+    [`${y}-10-09`]: ['한글날'],
+    [`${y}-12-25`]: ['기독탄신일']
+  };
+  krHolidayMap = { ...fixed, ...krHolidayMap };
+}
+
+function getHolidaysForDate(dateStr) {
+  const arr = krHolidayMap[dateStr];
+  return Array.isArray(arr) ? arr : [];
+}
+
+// Override initCalendar with search/color/holiday enhancement
+function initCalendar() {
+  ensureEventTimeFields();
+  ensureEventColorOptionsV2();
+  ensureCalendarSearchUI();
+  loadHolidayCache();
+  loadKoreanHolidays();
+
+  document.getElementById('cal-prev-month')?.addEventListener('click', () => {
+    state.currentDate.setMonth(state.currentDate.getMonth() - 1);
+    addFallbackFixedHolidaysForVisibleYear();
+    renderCalendar();
+    loadKoreanHolidays();
+  });
+  document.getElementById('cal-next-month')?.addEventListener('click', () => {
+    state.currentDate.setMonth(state.currentDate.getMonth() + 1);
+    addFallbackFixedHolidaysForVisibleYear();
+    renderCalendar();
+    loadKoreanHolidays();
+  });
+  document.getElementById('cal-today')?.addEventListener('click', () => {
+    state.currentDate = new Date();
+    renderCalendar();
+  });
+  document.getElementById('btn-add-event')?.addEventListener('click', () => openEventModal(null, getLocalDateString(new Date())));
+
+  document.getElementById('event-start-date')?.addEventListener('change', () => {
+    const s = document.getElementById('event-start-date');
+    const e = document.getElementById('event-end-date');
+    if (s && e && (!e.value || e.value < s.value)) e.value = s.value;
+  });
+
+  document.getElementById('event-form')?.addEventListener('submit', e => {
+    e.preventDefault();
+    const id = document.getElementById('event-id').value;
+    const title = document.getElementById('event-title').value.trim();
+    const startDate = document.getElementById('event-start-date').value;
+    const endDate = document.getElementById('event-end-date').value;
+    const startTime = document.getElementById('event-start-time')?.value || '';
+    const endTime = document.getElementById('event-end-time')?.value || '';
+    const color = document.getElementById('event-color').value;
+    const desc = document.getElementById('event-desc').value.trim();
+    if (!title) return alert('일정 제목을 입력해주세요.');
+    if (startDate > endDate) return alert('종료일은 시작일보다 빠를 수 없습니다.');
+    if (startDate === endDate && startTime && endTime && endTime < startTime) return alert('같은 날짜에서는 종료시간이 시작시간보다 빠를 수 없습니다.');
+    const eventData = { id: id || 'evt_' + Date.now(), title, startDate, endDate, startTime, endTime, color, desc, updatedAt: new Date().toISOString() };
+    const idx = state.events.findIndex(x => x.id === id);
+    if (idx >= 0) state.events[idx] = eventData;
+    else state.events.push(eventData);
+    saveDataToStorage();
+    renderDashboard();
+    renderCalendar();
+    renderCalendarSearchResults();
+    closeModal(document.getElementById('modal-event'));
+  });
+
+  document.getElementById('btn-delete-event')?.addEventListener('click', () => {
+    const id = document.getElementById('event-id').value;
+    if (!id || !confirm('일정을 삭제하시겠습니까?')) return;
+    state.events = state.events.filter(e => e.id !== id);
+    saveDataToStorage();
+    renderDashboard();
+    renderCalendar();
+    renderCalendarSearchResults();
+    closeModal(document.getElementById('modal-event'));
+  });
+  document.getElementById('btn-cancel-event')?.addEventListener('click', () => closeModal(document.getElementById('modal-event')));
+}
+
+// Override renderCalendar with search + holiday + row-auto rendering
+function renderCalendar() {
+  const year = state.currentDate.getFullYear();
+  const month = state.currentDate.getMonth();
+  const header = document.getElementById('calendar-month-year');
+  const grid = document.getElementById('calendar-grid');
+  if (header) header.textContent = `${year}년 ${month + 1}월`;
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  const firstDayIndex = new Date(year, month, 1).getDay();
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const prevLastDay = new Date(year, month, 0).getDate();
+  const cells = [];
+  for (let x = firstDayIndex; x > 0; x--) {
+    const day = prevLastDay - x + 1;
+    cells.push({ day, dateStr: getLocalDateString(new Date(year, month - 1, day)), isOtherMonth: true });
+  }
+  for (let i = 1; i <= lastDay; i++) {
+    cells.push({ day: i, dateStr: getLocalDateString(new Date(year, month, i)), isOtherMonth: false });
+  }
+  while (cells.length < 42) {
+    const day = cells.length - firstDayIndex - lastDay + 1;
+    cells.push({ day, dateStr: getLocalDateString(new Date(year, month + 1, day)), isOtherMonth: true });
+  }
+
+  const today = getLocalDateString(new Date());
+  state.events = state.events.map(migrateEventTimeFields);
+  cells.forEach(cell => {
+    const cellEl = document.createElement('div');
+    cellEl.className = 'calendar-cell';
+    if (cell.isOtherMonth) cellEl.classList.add('other-month');
+    if (cell.dateStr === today) cellEl.classList.add('today');
+    const weekday = ['일', '월', '화', '수', '목', '금', '토'][new Date(cell.dateStr).getDay()];
+    cellEl.innerHTML = `<div class="cell-date-header"><span class="cell-num">${cell.day}</span><span class="cell-weekday">${weekday}</span></div><div class="cell-events"></div>`;
+    const eventsContainer = cellEl.querySelector('.cell-events');
+
+    getHolidaysForDate(cell.dateStr).forEach(name => {
+      if (calendarSearchQuery && !String(name).toLowerCase().includes(calendarSearchQuery)) return;
+      const holiday = document.createElement('div');
+      holiday.className = 'event-badge holiday-badge';
+      holiday.textContent = name;
+      holiday.title = `공휴일: ${name}`;
+      eventsContainer.appendChild(holiday);
+    });
+
+    state.events
+      .filter(e => isDateInRange(cell.dateStr, e.startDate, e.endDate))
+      .filter(eventMatchesSearch)
+      .sort((a, b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99'))
+      .forEach(evt => {
+        const badge = document.createElement('div');
+        badge.className = 'event-badge';
+        badge.style.backgroundColor = evt.color || '#3498db';
+        badge.style.color = isLightColor(evt.color || '#3498db') ? '#111' : '#fff';
+        badge.textContent = `${formatEventTime(evt)}${evt.title}`;
+        badge.title = badge.textContent;
+        badge.addEventListener('click', ev => {
+          ev.stopPropagation();
+          openEventModal(evt);
+        });
+        eventsContainer.appendChild(badge);
+      });
+    cellEl.addEventListener('click', () => openEventModal(null, cell.dateStr));
+    grid.appendChild(cellEl);
+  });
+  renderCalendarSearchResults();
+}
+
+// Override modal open to keep expanded color set
+function openEventModal(eventObj = null, defaultDateStr = null) {
+  ensureEventTimeFields();
+  ensureEventColorOptionsV2();
+  const form = document.getElementById('event-form');
+  const deleteBtn = document.getElementById('btn-delete-event');
+  const titleHeader = document.getElementById('modal-event-title');
+  if (form) form.reset();
+  const selectedDate = defaultDateStr || getLocalDateString(new Date());
+  if (eventObj) {
+    eventObj = migrateEventTimeFields(eventObj);
+    if (titleHeader) titleHeader.textContent = '일정 수정';
+    document.getElementById('event-id').value = eventObj.id;
+    document.getElementById('event-title').value = eventObj.title || '';
+    document.getElementById('event-start-date').value = eventObj.startDate || selectedDate;
+    document.getElementById('event-end-date').value = eventObj.endDate || eventObj.startDate || selectedDate;
+    document.getElementById('event-start-time').value = eventObj.startTime || '';
+    document.getElementById('event-end-time').value = eventObj.endTime || '';
+    const select = document.getElementById('event-color');
+    if (select) select.value = EVENT_COLOR_OPTIONS_V2.some(([v]) => v === eventObj.color) ? eventObj.color : '#3498db';
+    document.getElementById('event-desc').value = eventObj.desc || '';
+    deleteBtn?.classList.remove('hidden');
+  } else {
+    if (titleHeader) titleHeader.textContent = '새 일정 추가';
+    document.getElementById('event-id').value = '';
+    document.getElementById('event-start-date').value = selectedDate;
+    document.getElementById('event-end-date').value = selectedDate;
+    document.getElementById('event-start-time').value = '';
+    document.getElementById('event-end-time').value = '';
+    const select = document.getElementById('event-color');
+    if (select) select.value = '#3498db';
+    deleteBtn?.classList.add('hidden');
+  }
+  openModal(document.getElementById('modal-event'));
+}
