@@ -1269,3 +1269,167 @@ function openEventModal(eventObj = null, defaultDateStr = null) {
   }
   openModal(document.getElementById('modal-event'));
 }
+
+
+// =====================================================
+// PATCH 20260729-2: Date click opens day schedule detail instead of add modal
+// =====================================================
+function getEventsForDate(dateStr) {
+  return state.events
+    .map(migrateEventTimeFields)
+    .filter(e => isDateInRange(dateStr, e.startDate, e.endDate))
+    .sort((a, b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99') || (a.title || '').localeCompare(b.title || ''));
+}
+
+function ensureDayScheduleModal() {
+  let modal = document.getElementById('modal-day-schedule');
+  if (modal) return modal;
+  modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'modal-day-schedule';
+  modal.innerHTML = `
+    <div class="modal-content day-schedule-modal-content">
+      <div class="modal-header">
+        <h3 id="day-schedule-title">일정 목록</h3>
+        <button class="btn-close" id="modal-day-schedule-close">&times;</button>
+      </div>
+      <div id="day-schedule-list" class="day-schedule-list"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="btn-close-day-schedule">닫기</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  document.getElementById('modal-day-schedule-close')?.addEventListener('click', () => closeModal(modal));
+  document.getElementById('btn-close-day-schedule')?.addEventListener('click', () => closeModal(modal));
+  modal.addEventListener('click', e => {
+    if (e.target === modal) closeModal(modal);
+  });
+  return modal;
+}
+
+function openDayScheduleModal(dateStr) {
+  const modal = ensureDayScheduleModal();
+  const title = document.getElementById('day-schedule-title');
+  const list = document.getElementById('day-schedule-list');
+  const d = new Date(dateStr);
+  const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
+  const displayDate = Number.isNaN(d.getTime()) ? dateStr : `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${weekdays[d.getDay()]})`;
+  if (title) title.textContent = `${displayDate} 일정`;
+  if (!list) return;
+  list.innerHTML = '';
+
+  const holidays = typeof getHolidaysForDate === 'function' ? getHolidaysForDate(dateStr) : [];
+  const events = getEventsForDate(dateStr);
+
+  if (!holidays.length && !events.length) {
+    list.innerHTML = '<div class="day-schedule-empty">등록된 일정이 없습니다.</div>';
+    openModal(modal);
+    return;
+  }
+
+  holidays.forEach(name => {
+    const item = document.createElement('div');
+    item.className = 'day-schedule-item holiday-detail-item';
+    item.innerHTML = `
+      <div class="day-schedule-color holiday-dot"></div>
+      <div class="day-schedule-body">
+        <div class="day-schedule-name">${escapeHTML(name)}</div>
+        <div class="day-schedule-meta">공휴일</div>
+      </div>
+    `;
+    list.appendChild(item);
+  });
+
+  events.forEach(evt => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'day-schedule-item day-event-item';
+    item.innerHTML = `
+      <span class="day-schedule-color" style="background:${evt.color || '#3498db'}"></span>
+      <span class="day-schedule-body">
+        <strong class="day-schedule-name">${escapeHTML(evt.title || '제목 없음')}</strong>
+        <span class="day-schedule-meta">${escapeHTML(formatEventTime(evt))}${escapeHTML(evt.startDate || '')}${evt.endDate && evt.endDate !== evt.startDate ? ' ~ ' + escapeHTML(evt.endDate) : ''}</span>
+        ${evt.desc ? `<span class="day-schedule-desc">${escapeHTML(evt.desc)}</span>` : ''}
+      </span>
+    `;
+    item.addEventListener('click', () => {
+      closeModal(modal);
+      openEventModal(evt);
+    });
+    list.appendChild(item);
+  });
+  openModal(modal);
+}
+
+// Override renderCalendar once more: date cell click = detail modal, add only via [일정 추가] button
+function renderCalendar() {
+  const year = state.currentDate.getFullYear();
+  const month = state.currentDate.getMonth();
+  const header = document.getElementById('calendar-month-year');
+  const grid = document.getElementById('calendar-grid');
+  if (header) header.textContent = `${year}년 ${month + 1}월`;
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  const firstDayIndex = new Date(year, month, 1).getDay();
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const prevLastDay = new Date(year, month, 0).getDate();
+  const cells = [];
+  for (let x = firstDayIndex; x > 0; x--) {
+    const day = prevLastDay - x + 1;
+    cells.push({ day, dateStr: getLocalDateString(new Date(year, month - 1, day)), isOtherMonth: true });
+  }
+  for (let i = 1; i <= lastDay; i++) {
+    cells.push({ day: i, dateStr: getLocalDateString(new Date(year, month, i)), isOtherMonth: false });
+  }
+  while (cells.length < 42) {
+    const day = cells.length - firstDayIndex - lastDay + 1;
+    cells.push({ day, dateStr: getLocalDateString(new Date(year, month + 1, day)), isOtherMonth: true });
+  }
+
+  const today = getLocalDateString(new Date());
+  state.events = state.events.map(migrateEventTimeFields);
+
+  cells.forEach(cell => {
+    const cellEl = document.createElement('div');
+    cellEl.className = 'calendar-cell';
+    if (cell.isOtherMonth) cellEl.classList.add('other-month');
+    if (cell.dateStr === today) cellEl.classList.add('today');
+    const weekday = ['일', '월', '화', '수', '목', '금', '토'][new Date(cell.dateStr).getDay()];
+    cellEl.innerHTML = `<div class="cell-date-header"><span class="cell-num">${cell.day}</span><span class="cell-weekday">${weekday}</span></div><div class="cell-events"></div>`;
+    const eventsContainer = cellEl.querySelector('.cell-events');
+
+    const holidays = typeof getHolidaysForDate === 'function' ? getHolidaysForDate(cell.dateStr) : [];
+    holidays.forEach(name => {
+      if (calendarSearchQuery && !String(name).toLowerCase().includes(calendarSearchQuery)) return;
+      const holiday = document.createElement('div');
+      holiday.className = 'event-badge holiday-badge';
+      holiday.textContent = name;
+      holiday.title = `공휴일: ${name}`;
+      eventsContainer.appendChild(holiday);
+    });
+
+    state.events
+      .filter(e => isDateInRange(cell.dateStr, e.startDate, e.endDate))
+      .filter(eventMatchesSearch)
+      .sort((a, b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99'))
+      .forEach(evt => {
+        const badge = document.createElement('div');
+        badge.className = 'event-badge';
+        badge.style.backgroundColor = evt.color || '#3498db';
+        badge.style.color = isLightColor(evt.color || '#3498db') ? '#111' : '#fff';
+        badge.textContent = `${formatEventTime(evt)}${evt.title}`;
+        badge.title = badge.textContent;
+        badge.addEventListener('click', ev => {
+          ev.stopPropagation();
+          openEventModal(evt);
+        });
+        eventsContainer.appendChild(badge);
+      });
+
+    cellEl.addEventListener('click', () => openDayScheduleModal(cell.dateStr));
+    grid.appendChild(cellEl);
+  });
+  if (typeof renderCalendarSearchResults === 'function') renderCalendarSearchResults();
+}
