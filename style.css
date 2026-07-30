@@ -2251,3 +2251,18 @@ button.day-schedule-item:hover {
     margin-top: 6px;
   }
 }
+
+/* =====================================================
+   PATCH 20260730-2: repeat/reminder select option visibility
+   ===================================================== */
+#event-repeat,
+#event-reminder,
+#event-repeat option,
+#event-reminder option {
+  color: #111111 !important;
+  background-color: #ffffff !important;
+}
+#event-repeat,
+#event-reminder {
+  -webkit-text-fill-color: #111111 !important;
+}
