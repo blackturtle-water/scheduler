@@ -2367,3 +2367,27 @@ button.day-schedule-item:hover {
     font-size: 14px;
   }
 }
+
+/* PATCH v.20260730-10-bulkdelete */
+.bulk-toolbar-v10 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.035);
+  flex-wrap: wrap;
+}
+.bulk-toolbar-title-v10 { font-size: 13px; font-weight: 800; color: var(--text-secondary); }
+.bulk-toolbar-actions-v10 { display: flex; gap: 8px; flex-wrap: wrap; }
+.bulk-check-v10 { width: 18px; height: 18px; min-width: 18px; accent-color: var(--color-danger); margin-top: 4px; cursor: pointer; }
+.note-bulk-row-v10, .dday-bulk-row-v10 { display: flex; align-items: flex-start; gap: 10px; min-width: 0; flex: 1; }
+.note-bulk-content-v10 { min-width: 0; flex: 1; }
+@media (max-width: 768px) {
+  .bulk-toolbar-v10 { align-items: stretch; }
+  .bulk-toolbar-actions-v10 { width: 100%; }
+  .bulk-toolbar-actions-v10 button { flex: 1; }
+}

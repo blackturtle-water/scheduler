@@ -3191,3 +3191,309 @@ const LUNAR_HOLIDAY_OVERRIDES_V8 = {
     }
   });
 })();
+
+// =====================================================
+// PATCH v.20260730-10-bulkdelete: bulk select and delete
+// - Calendar selected-day schedule list bulk delete
+// - Todo bulk delete
+// - Notes bulk delete
+// - D-Day bulk delete
+// =====================================================
+(function () {
+  const BULK_DELETE_VERSION = 'v.20260730-10-bulkdelete';
+
+  function makeBulkToolbarV10(title, countId, onSelectAll, onClear, onDelete) {
+    const bar = document.createElement('div');
+    bar.className = 'bulk-toolbar-v10';
+    bar.innerHTML = `
+      <div class="bulk-toolbar-title-v10">${title} <span id="${countId}">0개 선택</span></div>
+      <div class="bulk-toolbar-actions-v10">
+        <button type="button" class="btn btn-secondary btn-xs bulk-select-all-v10">전체 선택</button>
+        <button type="button" class="btn btn-secondary btn-xs bulk-clear-v10">선택 해제</button>
+        <button type="button" class="btn btn-danger btn-xs bulk-delete-v10">선택 삭제</button>
+      </div>
+    `;
+    bar.querySelector('.bulk-select-all-v10')?.addEventListener('click', onSelectAll);
+    bar.querySelector('.bulk-clear-v10')?.addEventListener('click', onClear);
+    bar.querySelector('.bulk-delete-v10')?.addEventListener('click', onDelete);
+    return bar;
+  }
+
+  function updateBulkCountV10(root, checkboxSelector, countId) {
+    const count = root.querySelectorAll(`${checkboxSelector}:checked`).length;
+    const countEl = document.getElementById(countId);
+    if (countEl) countEl.textContent = `${count}개 선택`;
+    return count;
+  }
+
+  function addBulkStylesV10() {
+    if (document.getElementById('bulk-delete-styles-v10')) return;
+    const style = document.createElement('style');
+    style.id = 'bulk-delete-styles-v10';
+    style.textContent = `
+      .bulk-toolbar-v10 {
+        display:flex;
+        justify-content:space-between;
+        align-items:center;
+        gap:10px;
+        padding:10px 12px;
+        margin-bottom:12px;
+        border:1px solid var(--panel-border);
+        border-radius:12px;
+        background:rgba(255,255,255,0.035);
+        flex-wrap:wrap;
+      }
+      .bulk-toolbar-title-v10 {font-size:13px;font-weight:800;color:var(--text-secondary);}
+      .bulk-toolbar-actions-v10 {display:flex;gap:8px;flex-wrap:wrap;}
+      .bulk-check-v10 {width:18px;height:18px;min-width:18px;accent-color:var(--color-danger);margin-top:4px;cursor:pointer;}
+      .todo-item.bulk-mode-v10,.note-item.bulk-mode-v10,.dday-item.bulk-mode-v10 {gap:10px;}
+      .todo-item.bulk-mode-v10 .todo-item-left,.note-bulk-row-v10,.dday-bulk-row-v10 {display:flex;align-items:flex-start;gap:10px;min-width:0;flex:1;}
+      .note-bulk-content-v10 {min-width:0;flex:1;}
+      .bulk-hint-v10 {font-size:12px;color:var(--text-muted);margin-top:-6px;margin-bottom:8px;}
+      @media (max-width:768px){.bulk-toolbar-v10{align-items:stretch}.bulk-toolbar-actions-v10 button{flex:1}.bulk-toolbar-actions-v10{width:100%}}
+    `;
+    document.head.appendChild(style);
+  }
+
+  // -----------------------------
+  // D-DAY bulk delete
+  // -----------------------------
+  window.renderDdayList = function () {
+    const el = document.getElementById('dashboard-dday-list');
+    if (!el) return;
+    el.innerHTML = '';
+    if (!state.ddays.length) { el.innerHTML = '<div class="no-data">등록된 D-Day 일정이 없습니다.</div>'; return; }
+
+    const countId = 'bulk-dday-count-v10';
+    const toolbar = makeBulkToolbarV10(
+      'D-Day 일괄 선택',
+      countId,
+      () => { el.querySelectorAll('.bulk-dday-check-v10').forEach(cb => cb.checked = true); updateBulkCountV10(el, '.bulk-dday-check-v10', countId); },
+      () => { el.querySelectorAll('.bulk-dday-check-v10').forEach(cb => cb.checked = false); updateBulkCountV10(el, '.bulk-dday-check-v10', countId); },
+      () => {
+        const ids = Array.from(el.querySelectorAll('.bulk-dday-check-v10:checked')).map(cb => cb.dataset.id);
+        if (!ids.length) return alert('삭제할 D-Day를 선택해주세요.');
+        if (!confirm(`선택한 D-Day ${ids.length}개를 삭제할까요?`)) return;
+        state.ddays = state.ddays.filter(d => !ids.includes(d.id));
+        saveDataToStorage();
+        renderDashboard();
+      }
+    );
+    el.appendChild(toolbar);
+
+    const today = new Date(getLocalDateString(new Date()));
+    state.ddays.slice().sort((a,b) => a.date.localeCompare(b.date)).forEach(d => {
+      const diff = Math.ceil((new Date(d.date) - today) / 86400000);
+      const badgeText = diff === 0 ? 'D-Day' : diff > 0 ? `D-${diff}` : `D+${Math.abs(diff)}`;
+      const item = document.createElement('div');
+      item.className = 'dday-item bulk-mode-v10';
+      item.innerHTML = `
+        <input type="checkbox" class="bulk-check-v10 bulk-dday-check-v10" data-id="${d.id}">
+        <div class="dday-bulk-row-v10">
+          <div class="dday-info"><div class="dday-title">${escapeHTML(d.title)}</div><div class="dday-target-date">${escapeHTML(d.date)}</div></div>
+          <div><span class="dday-badge ${diff < 0 ? 'dday-passed' : diff <= 7 ? 'dday-urgent' : ''}">${badgeText}</span><button class="btn-delete-dday" data-id="${d.id}"><i class="fa-solid fa-trash"></i></button></div>
+        </div>`;
+      item.querySelector('.bulk-dday-check-v10')?.addEventListener('change', () => updateBulkCountV10(el, '.bulk-dday-check-v10', countId));
+      el.appendChild(item);
+    });
+    el.querySelectorAll('.btn-delete-dday').forEach(btn => btn.addEventListener('click', () => {
+      state.ddays = state.ddays.filter(d => d.id !== btn.dataset.id);
+      saveDataToStorage(); renderDashboard();
+    }));
+    updateBulkCountV10(el, '.bulk-dday-check-v10', countId);
+  };
+  renderDdayList = window.renderDdayList;
+
+  // -----------------------------
+  // Todo bulk delete
+  // -----------------------------
+  window.renderTodoList = function () {
+    const el = document.getElementById('todo-items-list');
+    if (!el) return;
+    el.innerHTML = '';
+    let list = state.todos;
+    if (todoFilter === 'active') list = list.filter(t => !t.completed);
+    if (todoFilter === 'completed') list = list.filter(t => t.completed);
+    if (!list.length) { el.innerHTML = '<div class="no-data">할 일이 없습니다. 여유로운 하루를 보내세요!</div>'; return; }
+
+    const countId = 'bulk-todo-count-v10';
+    const toolbar = makeBulkToolbarV10(
+      '업무 일괄 선택',
+      countId,
+      () => { el.querySelectorAll('.bulk-todo-check-v10').forEach(cb => cb.checked = true); updateBulkCountV10(el, '.bulk-todo-check-v10', countId); },
+      () => { el.querySelectorAll('.bulk-todo-check-v10').forEach(cb => cb.checked = false); updateBulkCountV10(el, '.bulk-todo-check-v10', countId); },
+      () => {
+        const ids = Array.from(el.querySelectorAll('.bulk-todo-check-v10:checked')).map(cb => cb.dataset.id);
+        if (!ids.length) return alert('삭제할 업무를 선택해주세요.');
+        if (!confirm(`선택한 업무 ${ids.length}개를 삭제할까요?`)) return;
+        state.todos = state.todos.filter(t => !ids.includes(t.id));
+        if (editingTodoId && ids.includes(editingTodoId)) setTodoFormMode('add');
+        saveDataToStorage();
+        renderTodoList();
+        renderDashboard();
+      }
+    );
+    el.appendChild(toolbar);
+
+    const labels = { high: '높음', medium: '보통', low: '낮음' };
+    list.forEach(t => {
+      const item = document.createElement('div');
+      item.className = 'todo-item bulk-mode-v10' + (t.completed ? ' completed' : '');
+      item.innerHTML = `<input type="checkbox" class="bulk-check-v10 bulk-todo-check-v10" data-id="${t.id}">
+        <div class="todo-item-left"><label class="todo-checkbox-wrapper"><input type="checkbox" ${t.completed ? 'checked' : ''}><span class="todo-checkmark"></span></label><div class="todo-details"><div class="todo-text">${escapeHTML(t.text)}</div><div class="todo-meta"><span class="todo-priority-badge priority-${t.priority || 'medium'}">${labels[t.priority] || '보통'}</span>${t.duedate ? `<span class="todo-due-meta">${escapeHTML(t.duedate)}</span>` : ''}</div></div></div><div class="todo-actions"><button class="btn-todo-action btn-todo-edit" title="수정"><i class="fa-solid fa-pen"></i></button><button class="btn-todo-action btn-todo-delete" title="삭제"><i class="fa-solid fa-trash"></i></button></div>`;
+      item.querySelector('.bulk-todo-check-v10')?.addEventListener('change', () => updateBulkCountV10(el, '.bulk-todo-check-v10', countId));
+      item.querySelector('.todo-checkbox-wrapper input')?.addEventListener('change', e => { t.completed = e.target.checked; t.updatedAt = new Date().toISOString(); saveDataToStorage(); renderTodoList(); renderDashboard(); });
+      item.querySelector('.btn-todo-edit')?.addEventListener('click', () => startEditTodo(t.id));
+      item.querySelector('.btn-todo-delete')?.addEventListener('click', () => { state.todos = state.todos.filter(x => x.id !== t.id); if (editingTodoId === t.id) setTodoFormMode('add'); saveDataToStorage(); renderTodoList(); renderDashboard(); });
+      el.appendChild(item);
+    });
+    updateBulkCountV10(el, '.bulk-todo-check-v10', countId);
+  };
+  renderTodoList = window.renderTodoList;
+
+  // -----------------------------
+  // Notes bulk delete
+  // -----------------------------
+  window.renderNotesList = function () {
+    const el = document.getElementById('notes-list-items');
+    if (!el) return;
+    el.innerHTML = '';
+    if (!state.notes.length) { el.innerHTML = '<div class="no-data">메모가 없습니다.</div>'; return; }
+
+    const countId = 'bulk-note-count-v10';
+    const toolbar = makeBulkToolbarV10(
+      '메모 일괄 선택',
+      countId,
+      () => { el.querySelectorAll('.bulk-note-check-v10').forEach(cb => cb.checked = true); updateBulkCountV10(el, '.bulk-note-check-v10', countId); },
+      () => { el.querySelectorAll('.bulk-note-check-v10').forEach(cb => cb.checked = false); updateBulkCountV10(el, '.bulk-note-check-v10', countId); },
+      () => {
+        const ids = Array.from(el.querySelectorAll('.bulk-note-check-v10:checked')).map(cb => cb.dataset.id);
+        if (!ids.length) return alert('삭제할 메모를 선택해주세요.');
+        if (!confirm(`선택한 메모 ${ids.length}개를 삭제할까요?`)) return;
+        state.notes = state.notes.filter(n => !ids.includes(n.id));
+        if (activeNoteId && ids.includes(activeNoteId)) {
+          activeNoteId = null;
+          document.getElementById('note-editor-form')?.classList.add('hidden');
+          document.getElementById('note-editor-placeholder')?.classList.remove('hidden');
+        }
+        saveDataToStorage();
+        renderNotesList();
+        renderDashboard();
+      }
+    );
+    el.appendChild(toolbar);
+
+    state.notes.forEach(n => {
+      const item = document.createElement('div');
+      item.className = 'note-item bulk-mode-v10' + (n.id === activeNoteId ? ' active' : '');
+      item.innerHTML = `<div class="note-bulk-row-v10"><input type="checkbox" class="bulk-check-v10 bulk-note-check-v10" data-id="${n.id}"><div class="note-bulk-content-v10"><div class="note-item-title">${escapeHTML(n.title || '제목 없는 메모')}${n.favorite ? '<span class="note-item-star"><i class="fa-solid fa-star"></i></span>' : ''}</div><div class="note-item-preview">${escapeHTML((n.content || '').slice(0, 60))}</div><div class="note-item-meta"><span class="note-item-category">${escapeHTML(n.category || '분류 없음')}</span><span>${n.updatedAt ? new Date(n.updatedAt).toLocaleDateString('ko-KR') : ''}</span></div></div></div>`;
+      item.querySelector('.bulk-note-check-v10')?.addEventListener('click', ev => ev.stopPropagation());
+      item.querySelector('.bulk-note-check-v10')?.addEventListener('change', () => updateBulkCountV10(el, '.bulk-note-check-v10', countId));
+      item.addEventListener('click', ev => {
+        if (ev.target && ev.target.classList.contains('bulk-note-check-v10')) return;
+        selectNote(n.id);
+      });
+      el.appendChild(item);
+    });
+    updateBulkCountV10(el, '.bulk-note-check-v10', countId);
+  };
+  renderNotesList = window.renderNotesList;
+
+  // -----------------------------
+  // Calendar selected-day event bulk delete
+  // -----------------------------
+  window.openDayScheduleModal = function (dateStr) {
+    const modal = ensureDayScheduleModal();
+    const title = document.getElementById('day-schedule-title');
+    const list = document.getElementById('day-schedule-list');
+    const d = new Date(dateStr);
+    const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
+    const displayDate = Number.isNaN(d.getTime()) ? dateStr : `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${weekdays[d.getDay()]})`;
+    if (title) title.textContent = `${displayDate} 일정`;
+    if (!list) return;
+    list.innerHTML = '';
+
+    const holidays = typeof getHolidaysForDate === 'function' ? getHolidaysForDate(dateStr) : [];
+    const events = typeof getEventsForDate === 'function' ? getEventsForDate(dateStr) : [];
+
+    const countId = 'bulk-day-event-count-v10';
+    if (events.length) {
+      const toolbar = makeBulkToolbarV10(
+        '일정 일괄 선택',
+        countId,
+        () => { list.querySelectorAll('.bulk-day-event-check-v10').forEach(cb => cb.checked = true); updateBulkCountV10(list, '.bulk-day-event-check-v10', countId); },
+        () => { list.querySelectorAll('.bulk-day-event-check-v10').forEach(cb => cb.checked = false); updateBulkCountV10(list, '.bulk-day-event-check-v10', countId); },
+        () => {
+          const selected = Array.from(list.querySelectorAll('.bulk-day-event-check-v10:checked')).map(cb => ({ id: cb.dataset.id, date: cb.dataset.date, recurring: cb.dataset.recurring === '1' }));
+          if (!selected.length) return alert('삭제할 일정을 선택해주세요.');
+          if (!confirm(`선택한 일정 ${selected.length}개를 삭제할까요?\n반복 일정은 선택한 날짜 1건만 제외 처리됩니다.`)) return;
+          selected.forEach(sel => {
+            const idx = state.events.findIndex(e => e.id === sel.id);
+            if (idx < 0) return;
+            const master = state.events[idx];
+            const repeat = typeof getRepeatValue === 'function' ? getRepeatValue(master) : (master.repeat || 'none');
+            if (sel.recurring || (repeat && repeat !== 'none')) {
+              master.exceptionDeletes = master.exceptionDeletes || {};
+              master.exceptionDeletes[sel.date] = true;
+              master.updatedAt = new Date().toISOString();
+              state.events[idx] = master;
+            } else {
+              state.events = state.events.filter(e => e.id !== sel.id);
+            }
+          });
+          saveDataToStorage();
+          renderDashboard();
+          renderCalendar();
+          openDayScheduleModal(dateStr);
+        }
+      );
+      list.appendChild(toolbar);
+    }
+
+    if (!holidays.length && !events.length) {
+      list.innerHTML += '<div class="day-schedule-empty">등록된 일정이 없습니다.</div>';
+      if (typeof appendDayScheduleAddButtonV6 === 'function') appendDayScheduleAddButtonV6(list, modal, dateStr);
+      openModal(modal);
+      return;
+    }
+
+    holidays.forEach(name => {
+      const item = document.createElement('div');
+      item.className = 'day-schedule-item holiday-detail-item';
+      item.innerHTML = `<div class="day-schedule-color holiday-dot"></div><div class="day-schedule-body"><div class="day-schedule-name">${escapeHTML(name)}</div><div class="day-schedule-meta">공휴일</div></div>`;
+      list.appendChild(item);
+    });
+
+    events.forEach(evt => {
+      const item = document.createElement('div');
+      item.className = 'day-schedule-item day-event-item' + (evt.completed ? ' day-event-completed' : '');
+      item.innerHTML = `<input type="checkbox" class="bulk-check-v10 bulk-day-event-check-v10" data-id="${evt.id}" data-date="${dateStr}" data-recurring="${evt.isRecurringOccurrence ? '1' : '0'}"><button type="button" class="day-complete-toggle" title="완료 체크">${evt.completed ? '✓' : ''}</button> <span class="day-schedule-color" style="background:${evt.color || '#3498db'}"></span> <button type="button" class="day-schedule-open"> <span class="day-schedule-body"> <strong class="day-schedule-name">${escapeHTML(evt.title || '제목 없음')}</strong> <span class="day-schedule-meta">${evt.isRecurringOccurrence ? '↻ 반복 | ' : ''}${evt.reminder && evt.reminder !== 'none' ? '🔔 알림 | ' : ''}${escapeHTML(formatEventTime(evt))}${escapeHTML(evt.occurrenceDate || evt.startDate || '')}</span> ${evt.desc ? `<span class="day-schedule-desc">${escapeHTML(evt.desc)}</span>` : ''} </span> </button>`;
+      item.querySelector('.bulk-day-event-check-v10')?.addEventListener('change', () => updateBulkCountV10(list, '.bulk-day-event-check-v10', countId));
+      item.querySelector('.day-complete-toggle')?.addEventListener('click', () => {
+        if (typeof toggleEventCompleted === 'function') {
+          toggleEventCompleted(evt, dateStr);
+          openDayScheduleModal(dateStr);
+        }
+      });
+      item.querySelector('.day-schedule-open')?.addEventListener('click', () => {
+        closeModal(modal);
+        openEventModal(evt);
+      });
+      list.appendChild(item);
+    });
+
+    if (events.length) updateBulkCountV10(list, '.bulk-day-event-check-v10', countId);
+    if (typeof appendDayScheduleAddButtonV6 === 'function') appendDayScheduleAddButtonV6(list, modal, dateStr);
+    openModal(modal);
+  };
+  openDayScheduleModal = window.openDayScheduleModal;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    addBulkStylesV10();
+    setTimeout(() => {
+      renderDashboard();
+      renderTodoList();
+      renderNotesList();
+    }, 100);
+  });
+})();
