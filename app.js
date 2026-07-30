@@ -3157,3 +3157,108 @@ function openDayScheduleModal(dateStr) {
     }, 0);
   });
 })();
+
+// =====================================================
+// PATCH 20260730-7: stable holiday rendering and Constitution Day override
+// - Prevent fallback holidays from wiping fetched lunar/substitute holidays.
+// - Reload holidays by visible year instead of one-time holidayLoadStarted flag.
+// - Add Constitution Day from 2026 onward.
+// =====================================================
+(function () {
+  const HOLIDAY_PATCH_VERSION = '20260730-7';
+  const HOLIDAY_SOURCE_URL = 'https://holidays.hyunbin.page/basic.json';
+
+  function normalizeHolidayValueV7(value) {
+    if (Array.isArray(value)) return value.map(String).filter(Boolean);
+    if (value === null || value === undefined || value === '') return [];
+    return [String(value)];
+  }
+
+  function mergeHolidayMapV7(base, additions) {
+    const target = base || {};
+    Object.entries(additions || {}).forEach(([date, value]) => {
+      const incoming = normalizeHolidayValueV7(value);
+      if (!incoming.length) return;
+      const existing = normalizeHolidayValueV7(target[date]);
+      target[date] = Array.from(new Set([...existing, ...incoming]));
+    });
+    return target;
+  }
+
+  function addKoreanHolidayOverridesV7(year) {
+    if (!year || Number.isNaN(Number(year))) return;
+    const fixed = {};
+    fixed[`${year}-01-01`] = ['신정'];
+    fixed[`${year}-03-01`] = ['삼일절'];
+    fixed[`${year}-05-05`] = ['어린이날'];
+    fixed[`${year}-06-06`] = ['현충일'];
+    fixed[`${year}-08-15`] = ['광복절'];
+    fixed[`${year}-10-03`] = ['개천절'];
+    fixed[`${year}-10-09`] = ['한글날'];
+    fixed[`${year}-12-25`] = ['기독탄신일'];
+
+    // 제헌절은 2026년부터 공휴일로 재지정된 경우를 보정 반영합니다.
+    // 기존 공휴일 데이터 소스가 국경일을 제외하거나 캐시가 늦게 갱신되는 상황을 방지합니다.
+    if (Number(year) >= 2026) fixed[`${year}-07-17`] = ['제헌절'];
+
+    krHolidayMap = mergeHolidayMapV7(krHolidayMap || {}, fixed);
+  }
+
+  window.addFallbackFixedHolidaysForVisibleYear = function () {
+    addKoreanHolidayOverridesV7(state.currentDate.getFullYear());
+  };
+  addFallbackFixedHolidaysForVisibleYear = window.addFallbackFixedHolidaysForVisibleYear;
+
+  function hasHolidayForYearV7(year) {
+    const prefix = String(year) + '-';
+    return Object.keys(krHolidayMap || {}).some(date => date.startsWith(prefix));
+  }
+
+  window.loadKoreanHolidays = async function () {
+    const visibleYear = state.currentDate.getFullYear();
+    loadHolidayCache();
+    addKoreanHolidayOverridesV7(visibleYear);
+
+    // If fetched/cache data already contains the visible year, render immediately and keep data.
+    // Do not use the old one-time holidayLoadStarted guard.
+    const alreadyHasVisibleYear = hasHolidayForYearV7(visibleYear);
+
+    try {
+      if (!alreadyHasVisibleYear || !krHolidayMap.__loadedAllYears) {
+        const res = await fetch(`${HOLIDAY_SOURCE_URL}?v=${HOLIDAY_PATCH_VERSION}-${new Date().getFullYear()}`, { cache: 'no-cache' });
+        if (!res.ok) throw new Error('holiday fetch failed');
+        const data = await res.json();
+        const normalized = {};
+        Object.entries(data || {}).forEach(([date, value]) => {
+          const arr = normalizeHolidayValueV7(value);
+          if (arr.length) normalized[date] = arr;
+        });
+        krHolidayMap = mergeHolidayMapV7(krHolidayMap || {}, normalized);
+        krHolidayMap.__loadedAllYears = true;
+      }
+    } catch (err) {
+      console.warn('공휴일 데이터를 불러오지 못했습니다. 보정 공휴일을 유지합니다.', err);
+    }
+
+    addKoreanHolidayOverridesV7(visibleYear);
+    try {
+      const cacheData = { updatedAt: new Date().toISOString(), version: HOLIDAY_PATCH_VERSION, data: krHolidayMap };
+      localStorage.setItem(HOLIDAY_CACHE_KEY, JSON.stringify(cacheData));
+    } catch {}
+    renderCalendar();
+  };
+  loadKoreanHolidays = window.loadKoreanHolidays;
+
+  window.getHolidaysForDate = function (dateStr) {
+    return normalizeHolidayValueV7((krHolidayMap || {})[dateStr]);
+  };
+  getHolidaysForDate = window.getHolidaysForDate;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+      addKoreanHolidayOverridesV7(state.currentDate.getFullYear());
+      if (typeof renderCalendar === 'function') renderCalendar();
+      loadKoreanHolidays();
+    }, 50);
+  });
+})();
