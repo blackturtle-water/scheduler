@@ -1901,3 +1901,886 @@ function openEventModal(eventObj = null, defaultDateStr = null) {
   }
   openModal(document.getElementById('modal-event'));
 }
+
+
+// =====================================================
+// PATCH 20260730-3: Advanced recurring schedule conditions
+// =====================================================
+const EVENT_REPEAT_OPTIONS_V4 = [
+  ['none', '반복 없음'],
+  ['daily', '매일'],
+  ['weekly', '매주 지정 요일'],
+  ['biweekly', '격주 지정 요일'],
+  ['monthlyDate', '매월 지정일'],
+  ['monthlyLastWeekday', '매월 마지막주 지정 요일'],
+  ['monthlyLastBusinessDay', '매월 마지막 평일'],
+  ['yearly', '매년']
+];
+const WEEKDAY_OPTIONS_V4 = [
+  ['0', '일요일'], ['1', '월요일'], ['2', '화요일'], ['3', '수요일'], ['4', '목요일'], ['5', '금요일'], ['6', '토요일']
+];
+
+function getDateWeekStartV4(dateObj) {
+  const d = new Date(getLocalDateString(dateObj));
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+}
+
+function firstSelectedWeekdayOnOrAfterV4(startDateStr, weekday) {
+  const d = new Date(startDateStr);
+  if (Number.isNaN(d.getTime())) return null;
+  const diff = (Number(weekday) - d.getDay() + 7) % 7;
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+
+function getLastWeekdayOfMonthV4(year, monthIndex, weekday) {
+  const d = new Date(year, monthIndex + 1, 0);
+  const target = Number(weekday);
+  while (d.getDay() !== target) d.setDate(d.getDate() - 1);
+  return getLocalDateString(d);
+}
+
+function getLastBusinessDayOfMonthV4(year, monthIndex) {
+  const d = new Date(year, monthIndex + 1, 0);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return getLocalDateString(d);
+}
+
+function getDefaultWeekdayFromStartDateV4() {
+  const start = document.getElementById('event-start-date')?.value;
+  const d = start ? new Date(start) : new Date();
+  return String(Number.isNaN(d.getTime()) ? new Date().getDay() : d.getDay());
+}
+
+function ensureAdvancedRepeatDetailFieldsV4() {
+  ensureEventAdvancedFieldsV3();
+  const repeat = document.getElementById('event-repeat');
+  if (!repeat) return;
+
+  if (repeat.dataset.advancedRepeatV4 !== '1') {
+    repeat.innerHTML = '';
+    EVENT_REPEAT_OPTIONS_V4.forEach(([value, label]) => {
+      repeat.insertAdjacentHTML('beforeend', `<option value="${value}">${label}</option>`);
+    });
+    repeat.dataset.advancedRepeatV4 = '1';
+  }
+
+  if (!document.getElementById('event-repeat-detail')) {
+    const detail = document.createElement('div');
+    detail.id = 'event-repeat-detail';
+    detail.className = 'event-repeat-detail hidden';
+    detail.innerHTML = `
+      <div class="form-row">
+        <div class="form-group repeat-weekday-field hidden">
+          <label for="event-repeat-weekday">반복 요일</label>
+          <select id="event-repeat-weekday"></select>
+        </div>
+        <div class="form-group repeat-monthday-field hidden">
+          <label for="event-repeat-monthday">매월 반복일</label>
+          <select id="event-repeat-monthday"></select>
+        </div>
+      </div>
+      <small class="input-tip repeat-helper-text" id="event-repeat-helper"></small>
+    `;
+    const advRow = document.querySelector('.event-advanced-row');
+    advRow?.insertAdjacentElement('afterend', detail);
+    const weekday = document.getElementById('event-repeat-weekday');
+    WEEKDAY_OPTIONS_V4.forEach(([value, label]) => weekday.insertAdjacentHTML('beforeend', `<option value="${value}">${label}</option>`));
+    const monthDay = document.getElementById('event-repeat-monthday');
+    for (let i = 1; i <= 31; i++) monthDay.insertAdjacentHTML('beforeend', `<option value="${i}">${i}일</option>`);
+  }
+
+  repeat.removeEventListener('change', updateRepeatDetailVisibilityV4);
+  repeat.addEventListener('change', updateRepeatDetailVisibilityV4);
+  document.getElementById('event-start-date')?.removeEventListener('change', syncRepeatDefaultByStartDateV4);
+  document.getElementById('event-start-date')?.addEventListener('change', syncRepeatDefaultByStartDateV4);
+  syncRepeatDefaultByStartDateV4();
+  updateRepeatDetailVisibilityV4();
+}
+
+function syncRepeatDefaultByStartDateV4() {
+  const weekday = document.getElementById('event-repeat-weekday');
+  const monthDay = document.getElementById('event-repeat-monthday');
+  const start = document.getElementById('event-start-date')?.value;
+  if (weekday && !weekday.dataset.userTouched) weekday.value = getDefaultWeekdayFromStartDateV4();
+  if (monthDay && start && !monthDay.dataset.userTouched) {
+    const d = new Date(start);
+    if (!Number.isNaN(d.getTime())) monthDay.value = String(d.getDate());
+  }
+  weekday?.addEventListener('change', () => weekday.dataset.userTouched = '1', { once: true });
+  monthDay?.addEventListener('change', () => monthDay.dataset.userTouched = '1', { once: true });
+}
+
+function updateRepeatDetailVisibilityV4() {
+  const repeat = document.getElementById('event-repeat')?.value || 'none';
+  const detail = document.getElementById('event-repeat-detail');
+  const weekdayField = document.querySelector('.repeat-weekday-field');
+  const monthdayField = document.querySelector('.repeat-monthday-field');
+  const helper = document.getElementById('event-repeat-helper');
+  if (!detail || !weekdayField || !monthdayField || !helper) return;
+
+  detail.classList.toggle('hidden', ['none', 'daily', 'yearly', 'monthlyLastBusinessDay'].includes(repeat));
+  weekdayField.classList.toggle('hidden', !['weekly', 'biweekly', 'monthlyLastWeekday'].includes(repeat));
+  monthdayField.classList.toggle('hidden', repeat !== 'monthlyDate');
+
+  const weekdayLabel = WEEKDAY_OPTIONS_V4.find(([v]) => v === (document.getElementById('event-repeat-weekday')?.value || ''))?.[1] || '선택 요일';
+  const dayLabel = document.getElementById('event-repeat-monthday')?.value || '';
+  const messages = {
+    none: '',
+    daily: '매일 같은 시간에 반복됩니다.',
+    weekly: `매주 ${weekdayLabel}에 반복됩니다.`,
+    biweekly: `격주 ${weekdayLabel}에 반복됩니다. 시작일 이후 첫 ${weekdayLabel}을 기준으로 2주마다 표시됩니다.`,
+    monthlyDate: `매월 ${dayLabel}일에 반복됩니다. 해당 날짜가 없는 달은 표시하지 않습니다.`,
+    monthlyLastWeekday: `매월 마지막주 ${weekdayLabel}에 반복됩니다.`,
+    monthlyLastBusinessDay: '매월 마지막 평일에 반복됩니다. 토요일/일요일은 제외합니다.',
+    yearly: '매년 같은 월/일에 반복됩니다.'
+  };
+  helper.textContent = messages[repeat] || '';
+}
+
+function getRepeatValue(evt) {
+  const r = evt.repeat || evt.repeatType || 'none';
+  if (r === 'monthly') return 'monthlyDate';
+  return r;
+}
+
+function isRecurringEventOnDate(evt, dateStr) {
+  evt = migrateEventTimeFields(evt);
+  const repeat = getRepeatValue(evt);
+  if (!repeat || repeat === 'none') return isDateInRange(dateStr, evt.startDate, evt.endDate);
+  if (!evt.startDate) return false;
+  const base = new Date(evt.startDate);
+  const target = new Date(dateStr);
+  if (Number.isNaN(base.getTime()) || Number.isNaN(target.getTime())) return false;
+  if (target < new Date(getLocalDateString(base))) return false;
+
+  const span = typeof getEventSpanDays === 'function' ? getEventSpanDays(evt) : 0;
+  for (let offset = 0; offset <= span; offset++) {
+    const check = new Date(target);
+    check.setDate(check.getDate() - offset);
+    if (check < base) continue;
+    const checkStr = getLocalDateString(check);
+
+    if (repeat === 'daily') return true;
+    if (repeat === 'weekly') {
+      const weekday = evt.repeatWeekday ?? String(base.getDay());
+      if (check.getDay() === Number(weekday)) return true;
+    }
+    if (repeat === 'biweekly') {
+      const weekday = evt.repeatWeekday ?? String(base.getDay());
+      if (check.getDay() !== Number(weekday)) continue;
+      const first = firstSelectedWeekdayOnOrAfterV4(evt.startDate, weekday);
+      if (!first || check < first) continue;
+      const weekDiff = Math.floor((getDateWeekStartV4(check) - getDateWeekStartV4(first)) / (7 * 86400000));
+      if (weekDiff >= 0 && weekDiff % 2 === 0) return true;
+    }
+    if (repeat === 'monthlyDate') {
+      const day = Number(evt.repeatMonthDay || base.getDate());
+      if (check.getDate() === day && monthDiff(base, check) >= 0) return true;
+    }
+    if (repeat === 'monthlyLastWeekday') {
+      const weekday = evt.repeatWeekday ?? String(base.getDay());
+      if (checkStr === getLastWeekdayOfMonthV4(check.getFullYear(), check.getMonth(), weekday)) return true;
+    }
+    if (repeat === 'monthlyLastBusinessDay') {
+      if (checkStr === getLastBusinessDayOfMonthV4(check.getFullYear(), check.getMonth())) return true;
+    }
+    if (repeat === 'yearly') {
+      if (check.getMonth() === base.getMonth() && check.getDate() === base.getDate() && check.getFullYear() >= base.getFullYear()) return true;
+    }
+  }
+  return false;
+}
+
+// Override initCalendar once more with advanced repeat fields
+function initCalendar() {
+  ensureEventTimeFields();
+  ensureEventColorOptionsV2();
+  ensureEventAdvancedFieldsV3();
+  ensureAdvancedRepeatDetailFieldsV4();
+  ensureCalendarSearchUI();
+  loadHolidayCache();
+  loadKoreanHolidays();
+  startEventReminderTimerV3();
+
+  document.getElementById('cal-prev-month')?.addEventListener('click', () => {
+    state.currentDate.setMonth(state.currentDate.getMonth() - 1);
+    addFallbackFixedHolidaysForVisibleYear();
+    renderCalendar();
+    loadKoreanHolidays();
+  });
+  document.getElementById('cal-next-month')?.addEventListener('click', () => {
+    state.currentDate.setMonth(state.currentDate.getMonth() + 1);
+    addFallbackFixedHolidaysForVisibleYear();
+    renderCalendar();
+    loadKoreanHolidays();
+  });
+  document.getElementById('cal-today')?.addEventListener('click', () => {
+    state.currentDate = new Date();
+    renderCalendar();
+  });
+  document.getElementById('btn-add-event')?.addEventListener('click', () => openEventModal(null, getLocalDateString(new Date())));
+  document.getElementById('event-start-date')?.addEventListener('change', () => {
+    const s = document.getElementById('event-start-date');
+    const e = document.getElementById('event-end-date');
+    if (s && e && (!e.value || e.value < s.value)) e.value = s.value;
+    syncRepeatDefaultByStartDateV4();
+    updateRepeatDetailVisibilityV4();
+  });
+
+  document.getElementById('event-form')?.addEventListener('submit', e => {
+    e.preventDefault();
+    const id = document.getElementById('event-id').value;
+    const title = document.getElementById('event-title').value.trim();
+    const startDate = document.getElementById('event-start-date').value;
+    const endDate = document.getElementById('event-end-date').value;
+    const startTime = document.getElementById('event-start-time')?.value || '';
+    const endTime = document.getElementById('event-end-time')?.value || '';
+    const color = document.getElementById('event-color').value;
+    const desc = document.getElementById('event-desc').value.trim();
+    const repeat = document.getElementById('event-repeat')?.value || 'none';
+    const reminder = document.getElementById('event-reminder')?.value || 'none';
+    const repeatWeekday = document.getElementById('event-repeat-weekday')?.value || getDefaultWeekdayFromStartDateV4();
+    const repeatMonthDay = document.getElementById('event-repeat-monthday')?.value || (startDate ? String(new Date(startDate).getDate()) : '1');
+    const completed = !!document.getElementById('event-completed')?.checked;
+    if (!title) return alert('일정 제목을 입력해주세요.');
+    if (startDate > endDate) return alert('종료일은 시작일보다 빠를 수 없습니다.');
+    if (startDate === endDate && startTime && endTime && endTime < startTime) return alert('같은 날짜에서는 종료시간이 시작시간보다 빠를 수 없습니다.');
+    if (reminder !== 'none' && !startTime) return alert('알림을 사용하려면 시작시간을 입력해주세요.');
+    const old = state.events.find(x => x.id === id) || {};
+    const eventData = {
+      ...old,
+      id: id || 'evt_' + Date.now(),
+      title, startDate, endDate, startTime, endTime, color, desc,
+      repeat, reminder, completed,
+      repeatWeekday: ['weekly', 'biweekly', 'monthlyLastWeekday'].includes(repeat) ? repeatWeekday : '',
+      repeatMonthDay: repeat === 'monthlyDate' ? repeatMonthDay : '',
+      updatedAt: new Date().toISOString()
+    };
+    if (repeat === 'none') delete eventData.completedOccurrences;
+    const idx = state.events.findIndex(x => x.id === id);
+    if (idx >= 0) state.events[idx] = eventData;
+    else state.events.push(eventData);
+    if (reminder !== 'none') requestNotificationPermissionV3();
+    saveDataToStorage();
+    renderDashboard();
+    renderCalendar();
+    renderCalendarSearchResults();
+    closeModal(document.getElementById('modal-event'));
+  });
+
+  document.getElementById('btn-delete-event')?.addEventListener('click', () => {
+    const id = document.getElementById('event-id').value;
+    if (!id || !confirm('일정을 삭제하시겠습니까? 반복 일정이면 전체 반복 일정이 삭제됩니다.')) return;
+    state.events = state.events.filter(e => e.id !== id);
+    saveDataToStorage();
+    renderDashboard();
+    renderCalendar();
+    renderCalendarSearchResults();
+    closeModal(document.getElementById('modal-event'));
+  });
+  document.getElementById('btn-cancel-event')?.addEventListener('click', () => closeModal(document.getElementById('modal-event')));
+}
+
+// Override modal open with advanced repeat field values
+function openEventModal(eventObj = null, defaultDateStr = null) {
+  ensureEventTimeFields();
+  ensureEventColorOptionsV2();
+  ensureEventAdvancedFieldsV3();
+  ensureAdvancedRepeatDetailFieldsV4();
+  const form = document.getElementById('event-form');
+  const deleteBtn = document.getElementById('btn-delete-event');
+  const titleHeader = document.getElementById('modal-event-title');
+  if (form) form.reset();
+  const selectedDate = defaultDateStr || getLocalDateString(new Date());
+  if (eventObj) {
+    eventObj = migrateEventTimeFields(eventObj);
+    if (titleHeader) titleHeader.textContent = eventObj.isRecurringOccurrence ? '반복 일정 수정' : '일정 수정';
+    document.getElementById('event-id').value = eventObj.id;
+    document.getElementById('event-title').value = eventObj.title || '';
+    document.getElementById('event-start-date').value = eventObj.startDate || selectedDate;
+    document.getElementById('event-end-date').value = eventObj.endDate || eventObj.startDate || selectedDate;
+    document.getElementById('event-start-time').value = eventObj.startTime || '';
+    document.getElementById('event-end-time').value = eventObj.endTime || '';
+    const select = document.getElementById('event-color');
+    if (select) select.value = EVENT_COLOR_OPTIONS_V2.some(([v]) => v === eventObj.color) ? eventObj.color : '#3498db';
+    document.getElementById('event-repeat').value = getRepeatValue(eventObj);
+    document.getElementById('event-reminder').value = eventObj.reminder || 'none';
+    document.getElementById('event-repeat-weekday').value = String(eventObj.repeatWeekday || new Date(eventObj.startDate || selectedDate).getDay());
+    document.getElementById('event-repeat-monthday').value = String(eventObj.repeatMonthDay || new Date(eventObj.startDate || selectedDate).getDate());
+    document.getElementById('event-completed').checked = !!eventObj.completed;
+    document.getElementById('event-desc').value = eventObj.desc || '';
+    deleteBtn?.classList.remove('hidden');
+  } else {
+    if (titleHeader) titleHeader.textContent = '새 일정 추가';
+    document.getElementById('event-id').value = '';
+    document.getElementById('event-start-date').value = selectedDate;
+    document.getElementById('event-end-date').value = selectedDate;
+    document.getElementById('event-start-time').value = '';
+    document.getElementById('event-end-time').value = '';
+    const select = document.getElementById('event-color');
+    if (select) select.value = '#3498db';
+    document.getElementById('event-repeat').value = 'none';
+    document.getElementById('event-reminder').value = 'none';
+    document.getElementById('event-repeat-weekday').value = getDefaultWeekdayFromStartDateV4();
+    document.getElementById('event-repeat-monthday').value = String(new Date(selectedDate).getDate());
+    document.getElementById('event-completed').checked = false;
+    document.getElementById('event-desc').value = '';
+    deleteBtn?.classList.add('hidden');
+  }
+  updateRepeatDetailVisibilityV4();
+  openModal(document.getElementById('modal-event'));
+}
+
+
+// =====================================================
+// PATCH 20260730-4: interval weekly, nth weekday, edit scope for recurring events
+// =====================================================
+let currentEditingOccurrenceV5 = null;
+
+const EVENT_REPEAT_OPTIONS_V5 = [
+  ['none', '반복 없음'],
+  ['daily', '매일'],
+  ['weekly', '매주 지정 요일'],
+  ['intervalWeeks', 'N주마다 지정 요일'],
+  ['biweekly', '격주 지정 요일'],
+  ['monthlyDate', '매월 지정일'],
+  ['monthlyNthWeekday', '매월 N째주 지정 요일'],
+  ['monthlyLastWeekday', '매월 마지막주 지정 요일'],
+  ['monthlyLastBusinessDay', '매월 마지막 평일'],
+  ['yearly', '매년']
+];
+const MONTH_WEEK_OPTIONS_V5 = [
+  ['1', '첫째주'], ['2', '둘째주'], ['3', '셋째주'], ['4', '넷째주'], ['5', '다섯째주']
+];
+
+function getDateOnlyV5(dateStr) {
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return null;
+  return getLocalDateString(d);
+}
+function dateAddDaysV5(dateStr, days) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return getLocalDateString(d);
+}
+function isAfterRepeatUntilV5(evt, dateStr) {
+  return !!evt.repeatUntil && dateStr > evt.repeatUntil;
+}
+function getNthWeekdayOfMonthV5(year, monthIndex, nth, weekday) {
+  const first = new Date(year, monthIndex, 1);
+  const diff = (Number(weekday) - first.getDay() + 7) % 7;
+  const d = new Date(year, monthIndex, 1 + diff + (Number(nth) - 1) * 7);
+  if (d.getMonth() !== monthIndex) return '';
+  return getLocalDateString(d);
+}
+function getRepeatIntervalWeeksV5(evt) {
+  const n = Number(evt.repeatIntervalWeeks || (getRepeatValue(evt) === 'biweekly' ? 2 : 1));
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.round(n), 1), 52) : 1;
+}
+
+function ensureAdvancedRepeatDetailFieldsV4() {
+  ensureEventAdvancedFieldsV3();
+  const repeat = document.getElementById('event-repeat');
+  if (!repeat) return;
+
+  if (repeat.dataset.advancedRepeatV5 !== '1') {
+    repeat.innerHTML = '';
+    EVENT_REPEAT_OPTIONS_V5.forEach(([value, label]) => {
+      repeat.insertAdjacentHTML('beforeend', `<option value="${value}">${label}</option>`);
+    });
+    repeat.dataset.advancedRepeatV5 = '1';
+  }
+
+  if (!document.getElementById('event-repeat-detail')) {
+    const detail = document.createElement('div');
+    detail.id = 'event-repeat-detail';
+    detail.className = 'event-repeat-detail hidden';
+    detail.innerHTML = `
+      <div class="form-row">
+        <div class="form-group repeat-weekday-field hidden">
+          <label for="event-repeat-weekday">반복 요일</label>
+          <select id="event-repeat-weekday"></select>
+        </div>
+        <div class="form-group repeat-interval-field hidden">
+          <label for="event-repeat-interval-weeks">반복 간격</label>
+          <select id="event-repeat-interval-weeks"></select>
+        </div>
+        <div class="form-group repeat-monthweek-field hidden">
+          <label for="event-repeat-monthweek">매월 반복 주차</label>
+          <select id="event-repeat-monthweek"></select>
+        </div>
+        <div class="form-group repeat-monthday-field hidden">
+          <label for="event-repeat-monthday">매월 반복일</label>
+          <select id="event-repeat-monthday"></select>
+        </div>
+      </div>
+      <small class="input-tip repeat-helper-text" id="event-repeat-helper"></small>
+    `;
+    const advRow = document.querySelector('.event-advanced-row');
+    advRow?.insertAdjacentElement('afterend', detail);
+    const weekday = document.getElementById('event-repeat-weekday');
+    WEEKDAY_OPTIONS_V4.forEach(([value, label]) => weekday.insertAdjacentHTML('beforeend', `<option value="${value}">${label}</option>`));
+    const interval = document.getElementById('event-repeat-interval-weeks');
+    for (let i = 1; i <= 12; i++) interval.insertAdjacentHTML('beforeend', `<option value="${i}">${i}주마다</option>`);
+    const monthWeek = document.getElementById('event-repeat-monthweek');
+    MONTH_WEEK_OPTIONS_V5.forEach(([value, label]) => monthWeek.insertAdjacentHTML('beforeend', `<option value="${value}">${label}</option>`));
+    const monthDay = document.getElementById('event-repeat-monthday');
+    for (let i = 1; i <= 31; i++) monthDay.insertAdjacentHTML('beforeend', `<option value="${i}">${i}일</option>`);
+  } else if (!document.getElementById('event-repeat-interval-weeks')) {
+    // Existing detail from older patch: add missing fields safely.
+    const row = document.querySelector('#event-repeat-detail .form-row');
+    const interval = document.createElement('div');
+    interval.className = 'form-group repeat-interval-field hidden';
+    interval.innerHTML = '<label for="event-repeat-interval-weeks">반복 간격</label><select id="event-repeat-interval-weeks"></select>';
+    row?.insertAdjacentElement('beforeend', interval);
+    for (let i = 1; i <= 12; i++) document.getElementById('event-repeat-interval-weeks').insertAdjacentHTML('beforeend', `<option value="${i}">${i}주마다</option>`);
+    const monthWeek = document.createElement('div');
+    monthWeek.className = 'form-group repeat-monthweek-field hidden';
+    monthWeek.innerHTML = '<label for="event-repeat-monthweek">매월 반복 주차</label><select id="event-repeat-monthweek"></select>';
+    row?.insertAdjacentElement('beforeend', monthWeek);
+    MONTH_WEEK_OPTIONS_V5.forEach(([value, label]) => document.getElementById('event-repeat-monthweek').insertAdjacentHTML('beforeend', `<option value="${value}">${label}</option>`));
+  }
+
+  repeat.removeEventListener('change', updateRepeatDetailVisibilityV4);
+  repeat.addEventListener('change', updateRepeatDetailVisibilityV4);
+  ['event-repeat-weekday','event-repeat-monthday','event-repeat-interval-weeks','event-repeat-monthweek'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', updateRepeatDetailVisibilityV4);
+  });
+  document.getElementById('event-start-date')?.removeEventListener('change', syncRepeatDefaultByStartDateV4);
+  document.getElementById('event-start-date')?.addEventListener('change', syncRepeatDefaultByStartDateV4);
+  syncRepeatDefaultByStartDateV4();
+  updateRepeatDetailVisibilityV4();
+}
+
+function syncRepeatDefaultByStartDateV4() {
+  const weekday = document.getElementById('event-repeat-weekday');
+  const monthDay = document.getElementById('event-repeat-monthday');
+  const monthWeek = document.getElementById('event-repeat-monthweek');
+  const interval = document.getElementById('event-repeat-interval-weeks');
+  const start = document.getElementById('event-start-date')?.value;
+  if (weekday && !weekday.dataset.userTouched) weekday.value = getDefaultWeekdayFromStartDateV4();
+  if (monthDay && start && !monthDay.dataset.userTouched) {
+    const d = new Date(start);
+    if (!Number.isNaN(d.getTime())) monthDay.value = String(d.getDate());
+  }
+  if (monthWeek && start && !monthWeek.dataset.userTouched) {
+    const d = new Date(start);
+    if (!Number.isNaN(d.getTime())) monthWeek.value = String(Math.ceil(d.getDate() / 7));
+  }
+  if (interval && !interval.value) interval.value = '3';
+  weekday?.addEventListener('change', () => weekday.dataset.userTouched = '1', { once: true });
+  monthDay?.addEventListener('change', () => monthDay.dataset.userTouched = '1', { once: true });
+  monthWeek?.addEventListener('change', () => monthWeek.dataset.userTouched = '1', { once: true });
+}
+
+function updateRepeatDetailVisibilityV4() {
+  const repeat = document.getElementById('event-repeat')?.value || 'none';
+  const detail = document.getElementById('event-repeat-detail');
+  const weekdayField = document.querySelector('.repeat-weekday-field');
+  const monthdayField = document.querySelector('.repeat-monthday-field');
+  const intervalField = document.querySelector('.repeat-interval-field');
+  const monthWeekField = document.querySelector('.repeat-monthweek-field');
+  const helper = document.getElementById('event-repeat-helper');
+  if (!detail || !weekdayField || !monthdayField || !helper) return;
+
+  const needsDetail = ['weekly','intervalWeeks','biweekly','monthlyDate','monthlyNthWeekday','monthlyLastWeekday'].includes(repeat);
+  detail.classList.toggle('hidden', !needsDetail);
+  weekdayField.classList.toggle('hidden', !['weekly','intervalWeeks','biweekly','monthlyNthWeekday','monthlyLastWeekday'].includes(repeat));
+  monthdayField.classList.toggle('hidden', repeat !== 'monthlyDate');
+  intervalField?.classList.toggle('hidden', repeat !== 'intervalWeeks');
+  monthWeekField?.classList.toggle('hidden', repeat !== 'monthlyNthWeekday');
+
+  const weekdayLabel = WEEKDAY_OPTIONS_V4.find(([v]) => v === (document.getElementById('event-repeat-weekday')?.value || ''))?.[1] || '선택 요일';
+  const dayLabel = document.getElementById('event-repeat-monthday')?.value || '';
+  const intervalLabel = document.getElementById('event-repeat-interval-weeks')?.value || '3';
+  const monthWeekLabel = MONTH_WEEK_OPTIONS_V5.find(([v]) => v === (document.getElementById('event-repeat-monthweek')?.value || ''))?.[1] || '선택 주차';
+  const messages = {
+    none: '',
+    daily: '매일 같은 시간에 반복됩니다.',
+    weekly: `매주 ${weekdayLabel}에 반복됩니다.`,
+    intervalWeeks: `${intervalLabel}주마다 ${weekdayLabel}에 반복됩니다.`,
+    biweekly: `격주 ${weekdayLabel}에 반복됩니다.`,
+    monthlyDate: `매월 ${dayLabel}일에 반복됩니다. 해당 날짜가 없는 달은 표시하지 않습니다.`,
+    monthlyNthWeekday: `매월 ${monthWeekLabel} ${weekdayLabel}에 반복됩니다. 해당 주차/요일이 없는 달은 표시하지 않습니다.`,
+    monthlyLastWeekday: `매월 마지막주 ${weekdayLabel}에 반복됩니다.`,
+    monthlyLastBusinessDay: '매월 마지막 평일에 반복됩니다. 토요일/일요일은 제외합니다.',
+    yearly: '매년 같은 월/일에 반복됩니다.'
+  };
+  helper.textContent = messages[repeat] || '';
+}
+
+function getRepeatValue(evt) {
+  const r = evt.repeat || evt.repeatType || 'none';
+  if (r === 'monthly') return 'monthlyDate';
+  return r;
+}
+
+function isRecurringEventOnDate(evt, dateStr) {
+  evt = migrateEventTimeFields(evt);
+  const repeat = getRepeatValue(evt);
+  if (!repeat || repeat === 'none') return isDateInRange(dateStr, evt.startDate, evt.endDate);
+  if (!evt.startDate) return false;
+  if (evt.exceptionDeletes && evt.exceptionDeletes[dateStr]) return false;
+  if (isAfterRepeatUntilV5(evt, dateStr)) return false;
+
+  const base = new Date(evt.startDate);
+  const target = new Date(dateStr);
+  if (Number.isNaN(base.getTime()) || Number.isNaN(target.getTime())) return false;
+  if (target < new Date(getLocalDateString(base))) return false;
+
+  const span = typeof getEventSpanDays === 'function' ? getEventSpanDays(evt) : 0;
+  for (let offset = 0; offset <= span; offset++) {
+    const check = new Date(target);
+    check.setDate(check.getDate() - offset);
+    if (check < base) continue;
+    const checkStr = getLocalDateString(check);
+    if (isAfterRepeatUntilV5(evt, checkStr)) continue;
+
+    if (repeat === 'daily') return true;
+    if (repeat === 'weekly') {
+      const weekday = evt.repeatWeekday ?? String(base.getDay());
+      if (check.getDay() === Number(weekday)) return true;
+    }
+    if (repeat === 'biweekly' || repeat === 'intervalWeeks') {
+      const weekday = evt.repeatWeekday ?? String(base.getDay());
+      if (check.getDay() !== Number(weekday)) continue;
+      const first = firstSelectedWeekdayOnOrAfterV4(evt.startDate, weekday);
+      if (!first || check < first) continue;
+      const weekDiff = Math.floor((getDateWeekStartV4(check) - getDateWeekStartV4(first)) / (7 * 86400000));
+      const interval = repeat === 'biweekly' ? 2 : getRepeatIntervalWeeksV5(evt);
+      if (weekDiff >= 0 && weekDiff % interval === 0) return true;
+    }
+    if (repeat === 'monthlyDate') {
+      const day = Number(evt.repeatMonthDay || base.getDate());
+      if (check.getDate() === day && monthDiff(base, check) >= 0) return true;
+    }
+    if (repeat === 'monthlyNthWeekday') {
+      const nth = evt.repeatMonthWeek || String(Math.ceil(base.getDate() / 7));
+      const weekday = evt.repeatWeekday ?? String(base.getDay());
+      if (checkStr === getNthWeekdayOfMonthV5(check.getFullYear(), check.getMonth(), nth, weekday)) return true;
+    }
+    if (repeat === 'monthlyLastWeekday') {
+      const weekday = evt.repeatWeekday ?? String(base.getDay());
+      if (checkStr === getLastWeekdayOfMonthV4(check.getFullYear(), check.getMonth(), weekday)) return true;
+    }
+    if (repeat === 'monthlyLastBusinessDay') {
+      if (checkStr === getLastBusinessDayOfMonthV4(check.getFullYear(), check.getMonth())) return true;
+    }
+    if (repeat === 'yearly') {
+      if (check.getMonth() === base.getMonth() && check.getDate() === base.getDate() && check.getFullYear() >= base.getFullYear()) return true;
+    }
+  }
+  return false;
+}
+
+function getOccurrenceForDate(evt, dateStr) {
+  const repeat = getRepeatValue(evt);
+  const override = evt.occurrenceOverrides && evt.occurrenceOverrides[dateStr] ? evt.occurrenceOverrides[dateStr] : null;
+  const completedMap = evt.completedOccurrences || {};
+  const merged = override ? { ...evt, ...override } : evt;
+  return {
+    ...migrateEventTimeFields(merged),
+    id: evt.id,
+    sourceEventId: evt.id,
+    occurrenceDate: dateStr,
+    occurrenceKey: `${evt.id || 'evt'}__${dateStr}`,
+    isRecurringOccurrence: repeat && repeat !== 'none',
+    completed: repeat && repeat !== 'none' ? !!completedMap[dateStr] : !!merged.completed
+  };
+}
+
+function ensureEditScopeFieldV5() {
+  if (document.getElementById('event-edit-scope-wrap')) return;
+  const completedWrap = document.getElementById('event-completed-wrap');
+  const wrap = document.createElement('div');
+  wrap.id = 'event-edit-scope-wrap';
+  wrap.className = 'event-edit-scope-wrap hidden';
+  wrap.innerHTML = `
+    <label for="event-edit-scope">반복 일정 수정 범위</label>
+    <select id="event-edit-scope">
+      <option value="all">전체 반복 일정 수정</option>
+      <option value="only">해당 일정만 수정</option>
+      <option value="future">이 일정부터 향후 일정 모두 수정</option>
+    </select>
+    <small class="input-tip">반복 일정에서만 적용됩니다.</small>
+  `;
+  completedWrap?.insertAdjacentElement('afterend', wrap);
+}
+function showEditScopeIfNeededV5(eventObj) {
+  ensureEditScopeFieldV5();
+  const wrap = document.getElementById('event-edit-scope-wrap');
+  const select = document.getElementById('event-edit-scope');
+  const isRecurring = !!eventObj && !!eventObj.isRecurringOccurrence;
+  wrap?.classList.toggle('hidden', !isRecurring);
+  if (select) select.value = isRecurring ? 'only' : 'all';
+}
+
+function getEventDataFromFormV5(old = {}) {
+  const id = document.getElementById('event-id').value;
+  const title = document.getElementById('event-title').value.trim();
+  const startDate = document.getElementById('event-start-date').value;
+  const endDate = document.getElementById('event-end-date').value;
+  const startTime = document.getElementById('event-start-time')?.value || '';
+  const endTime = document.getElementById('event-end-time')?.value || '';
+  const color = document.getElementById('event-color').value;
+  const desc = document.getElementById('event-desc').value.trim();
+  const repeat = document.getElementById('event-repeat')?.value || 'none';
+  const reminder = document.getElementById('event-reminder')?.value || 'none';
+  const repeatWeekday = document.getElementById('event-repeat-weekday')?.value || getDefaultWeekdayFromStartDateV4();
+  const repeatMonthDay = document.getElementById('event-repeat-monthday')?.value || (startDate ? String(new Date(startDate).getDate()) : '1');
+  const repeatMonthWeek = document.getElementById('event-repeat-monthweek')?.value || (startDate ? String(Math.ceil(new Date(startDate).getDate() / 7)) : '1');
+  const repeatIntervalWeeks = document.getElementById('event-repeat-interval-weeks')?.value || '3';
+  const completed = !!document.getElementById('event-completed')?.checked;
+  return {
+    ...old,
+    id: id || 'evt_' + Date.now(),
+    title, startDate, endDate, startTime, endTime, color, desc,
+    repeat, reminder, completed,
+    repeatWeekday: ['weekly','biweekly','intervalWeeks','monthlyNthWeekday','monthlyLastWeekday'].includes(repeat) ? repeatWeekday : '',
+    repeatMonthDay: repeat === 'monthlyDate' ? repeatMonthDay : '',
+    repeatMonthWeek: repeat === 'monthlyNthWeekday' ? repeatMonthWeek : '',
+    repeatIntervalWeeks: repeat === 'intervalWeeks' ? repeatIntervalWeeks : '',
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function validateEventFormV5(data) {
+  if (!data.title) return '일정 제목을 입력해주세요.';
+  if (data.startDate > data.endDate) return '종료일은 시작일보다 빠를 수 없습니다.';
+  if (data.startDate === data.endDate && data.startTime && data.endTime && data.endTime < data.startTime) return '같은 날짜에서는 종료시간이 시작시간보다 빠를 수 없습니다.';
+  if (data.reminder !== 'none' && !data.startTime) return '알림을 사용하려면 시작시간을 입력해주세요.';
+  return '';
+}
+
+function createSingleOccurrenceEventV5(master, dateStr, formData) {
+  const newEvent = {
+    ...formData,
+    id: `evt_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    repeat: 'none',
+    repeatWeekday: '',
+    repeatMonthDay: '',
+    repeatMonthWeek: '',
+    repeatIntervalWeeks: '',
+    completedOccurrences: undefined,
+    occurrenceOverrides: undefined,
+    exceptionDeletes: undefined,
+    createdFromRecurringId: master.id,
+    createdFromOccurrenceDate: dateStr,
+    updatedAt: new Date().toISOString()
+  };
+  delete newEvent.completedOccurrences;
+  delete newEvent.occurrenceOverrides;
+  delete newEvent.exceptionDeletes;
+  return newEvent;
+}
+
+function saveRecurringEditV5(formData) {
+  const id = formData.id;
+  const idx = state.events.findIndex(e => e.id === id);
+  if (idx < 0) return;
+  const master = state.events[idx];
+  const occurrenceDate = currentEditingOccurrenceV5?.occurrenceDate || formData.startDate;
+  const scope = document.getElementById('event-edit-scope')?.value || 'all';
+
+  if (scope === 'only') {
+    master.exceptionDeletes = master.exceptionDeletes || {};
+    master.exceptionDeletes[occurrenceDate] = true;
+    master.updatedAt = new Date().toISOString();
+    state.events[idx] = master;
+    state.events.push(createSingleOccurrenceEventV5(master, occurrenceDate, formData));
+    return;
+  }
+
+  if (scope === 'future') {
+    const until = dateAddDaysV5(occurrenceDate, -1);
+    master.repeatUntil = until;
+    master.updatedAt = new Date().toISOString();
+    state.events[idx] = master;
+    const newMaster = {
+      ...formData,
+      id: `evt_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      startDate: formData.startDate || occurrenceDate,
+      endDate: formData.endDate || formData.startDate || occurrenceDate,
+      completed: false,
+      completedOccurrences: {},
+      occurrenceOverrides: {},
+      exceptionDeletes: {},
+      repeatUntil: '',
+      splitFromRecurringId: master.id,
+      splitFromOccurrenceDate: occurrenceDate,
+      updatedAt: new Date().toISOString()
+    };
+    state.events.push(newMaster);
+    return;
+  }
+
+  // all
+  const keep = {
+    completedOccurrences: master.completedOccurrences || {},
+    occurrenceOverrides: master.occurrenceOverrides || {},
+    exceptionDeletes: master.exceptionDeletes || {},
+    repeatUntil: master.repeatUntil || ''
+  };
+  state.events[idx] = { ...formData, ...keep, id: master.id, updatedAt: new Date().toISOString() };
+}
+
+// Override initCalendar with edit scope handling
+function initCalendar() {
+  ensureEventTimeFields();
+  ensureEventColorOptionsV2();
+  ensureEventAdvancedFieldsV3();
+  ensureAdvancedRepeatDetailFieldsV4();
+  ensureEditScopeFieldV5();
+  ensureCalendarSearchUI();
+  loadHolidayCache();
+  loadKoreanHolidays();
+  startEventReminderTimerV3();
+
+  document.getElementById('cal-prev-month')?.addEventListener('click', () => {
+    state.currentDate.setMonth(state.currentDate.getMonth() - 1);
+    addFallbackFixedHolidaysForVisibleYear();
+    renderCalendar();
+    loadKoreanHolidays();
+  });
+  document.getElementById('cal-next-month')?.addEventListener('click', () => {
+    state.currentDate.setMonth(state.currentDate.getMonth() + 1);
+    addFallbackFixedHolidaysForVisibleYear();
+    renderCalendar();
+    loadKoreanHolidays();
+  });
+  document.getElementById('cal-today')?.addEventListener('click', () => { state.currentDate = new Date(); renderCalendar(); });
+  document.getElementById('btn-add-event')?.addEventListener('click', () => openEventModal(null, getLocalDateString(new Date())));
+  document.getElementById('event-start-date')?.addEventListener('change', () => {
+    const s = document.getElementById('event-start-date');
+    const e = document.getElementById('event-end-date');
+    if (s && e && (!e.value || e.value < s.value)) e.value = s.value;
+    syncRepeatDefaultByStartDateV4();
+    updateRepeatDetailVisibilityV4();
+  });
+
+  document.getElementById('event-form')?.addEventListener('submit', e => {
+    e.preventDefault();
+    const id = document.getElementById('event-id').value;
+    const old = state.events.find(x => x.id === id) || {};
+    const formData = getEventDataFromFormV5(old);
+    const err = validateEventFormV5(formData);
+    if (err) return alert(err);
+
+    if (currentEditingOccurrenceV5 && currentEditingOccurrenceV5.isRecurringOccurrence) {
+      saveRecurringEditV5(formData);
+    } else {
+      if (formData.repeat === 'none') {
+        delete formData.completedOccurrences;
+        delete formData.occurrenceOverrides;
+        delete formData.exceptionDeletes;
+        delete formData.repeatUntil;
+      }
+      const idx = state.events.findIndex(x => x.id === id);
+      if (idx >= 0) state.events[idx] = formData;
+      else state.events.push(formData);
+    }
+
+    if (formData.reminder !== 'none') requestNotificationPermissionV3();
+    currentEditingOccurrenceV5 = null;
+    saveDataToStorage();
+    renderDashboard();
+    renderCalendar();
+    renderCalendarSearchResults();
+    closeModal(document.getElementById('modal-event'));
+  });
+
+  document.getElementById('btn-delete-event')?.addEventListener('click', () => {
+    const id = document.getElementById('event-id').value;
+    if (!id) return;
+    if (currentEditingOccurrenceV5?.isRecurringOccurrence) {
+      const scope = document.getElementById('event-edit-scope')?.value || 'only';
+      const idx = state.events.findIndex(e => e.id === id);
+      const master = state.events[idx];
+      const date = currentEditingOccurrenceV5.occurrenceDate;
+      if (scope === 'only') {
+        if (!confirm('해당 반복 일정 1건만 삭제할까요?')) return;
+        master.exceptionDeletes = master.exceptionDeletes || {};
+        master.exceptionDeletes[date] = true;
+        master.updatedAt = new Date().toISOString();
+      } else if (scope === 'future') {
+        if (!confirm('이 일정부터 향후 반복 일정을 모두 삭제할까요?')) return;
+        master.repeatUntil = dateAddDaysV5(date, -1);
+        master.updatedAt = new Date().toISOString();
+      } else {
+        if (!confirm('전체 반복 일정을 삭제할까요?')) return;
+        state.events = state.events.filter(e => e.id !== id);
+      }
+    } else {
+      if (!confirm('일정을 삭제하시겠습니까?')) return;
+      state.events = state.events.filter(e => e.id !== id);
+    }
+    currentEditingOccurrenceV5 = null;
+    saveDataToStorage();
+    renderDashboard();
+    renderCalendar();
+    renderCalendarSearchResults();
+    closeModal(document.getElementById('modal-event'));
+  });
+  document.getElementById('btn-cancel-event')?.addEventListener('click', () => { currentEditingOccurrenceV5 = null; closeModal(document.getElementById('modal-event')); });
+}
+
+// Override openEventModal to show scope and advanced repeat values
+function openEventModal(eventObj = null, defaultDateStr = null) {
+  ensureEventTimeFields();
+  ensureEventColorOptionsV2();
+  ensureEventAdvancedFieldsV3();
+  ensureAdvancedRepeatDetailFieldsV4();
+  ensureEditScopeFieldV5();
+  const form = document.getElementById('event-form');
+  const deleteBtn = document.getElementById('btn-delete-event');
+  const titleHeader = document.getElementById('modal-event-title');
+  if (form) form.reset();
+  const selectedDate = defaultDateStr || getLocalDateString(new Date());
+  currentEditingOccurrenceV5 = eventObj && eventObj.isRecurringOccurrence ? { ...eventObj } : null;
+  showEditScopeIfNeededV5(eventObj);
+
+  if (eventObj) {
+    eventObj = migrateEventTimeFields(eventObj);
+    if (titleHeader) titleHeader.textContent = eventObj.isRecurringOccurrence ? '반복 일정 수정' : '일정 수정';
+    document.getElementById('event-id').value = eventObj.id;
+    document.getElementById('event-title').value = eventObj.title || '';
+    document.getElementById('event-start-date').value = eventObj.isRecurringOccurrence ? (eventObj.occurrenceDate || selectedDate) : (eventObj.startDate || selectedDate);
+    document.getElementById('event-end-date').value = eventObj.isRecurringOccurrence ? (eventObj.occurrenceDate || selectedDate) : (eventObj.endDate || eventObj.startDate || selectedDate);
+    document.getElementById('event-start-time').value = eventObj.startTime || '';
+    document.getElementById('event-end-time').value = eventObj.endTime || '';
+    const select = document.getElementById('event-color');
+    if (select) select.value = EVENT_COLOR_OPTIONS_V2.some(([v]) => v === eventObj.color) ? eventObj.color : '#3498db';
+    document.getElementById('event-repeat').value = getRepeatValue(eventObj);
+    document.getElementById('event-reminder').value = eventObj.reminder || 'none';
+    document.getElementById('event-repeat-weekday').value = String(eventObj.repeatWeekday || new Date(eventObj.startDate || selectedDate).getDay());
+    document.getElementById('event-repeat-monthday').value = String(eventObj.repeatMonthDay || new Date(eventObj.startDate || selectedDate).getDate());
+    document.getElementById('event-repeat-monthweek').value = String(eventObj.repeatMonthWeek || Math.ceil(new Date(eventObj.startDate || selectedDate).getDate() / 7));
+    document.getElementById('event-repeat-interval-weeks').value = String(eventObj.repeatIntervalWeeks || (getRepeatValue(eventObj) === 'biweekly' ? 2 : 3));
+    document.getElementById('event-completed').checked = !!eventObj.completed;
+    document.getElementById('event-desc').value = eventObj.desc || '';
+    deleteBtn?.classList.remove('hidden');
+  } else {
+    if (titleHeader) titleHeader.textContent = '새 일정 추가';
+    currentEditingOccurrenceV5 = null;
+    document.getElementById('event-id').value = '';
+    document.getElementById('event-start-date').value = selectedDate;
+    document.getElementById('event-end-date').value = selectedDate;
+    document.getElementById('event-start-time').value = '';
+    document.getElementById('event-end-time').value = '';
+    const select = document.getElementById('event-color');
+    if (select) select.value = '#3498db';
+    document.getElementById('event-repeat').value = 'none';
+    document.getElementById('event-reminder').value = 'none';
+    document.getElementById('event-repeat-weekday').value = getDefaultWeekdayFromStartDateV4();
+    document.getElementById('event-repeat-monthday').value = String(new Date(selectedDate).getDate());
+    document.getElementById('event-repeat-monthweek').value = String(Math.ceil(new Date(selectedDate).getDate() / 7));
+    document.getElementById('event-repeat-interval-weeks').value = '3';
+    document.getElementById('event-completed').checked = false;
+    document.getElementById('event-desc').value = '';
+    deleteBtn?.classList.add('hidden');
+  }
+  updateRepeatDetailVisibilityV4();
+  openModal(document.getElementById('modal-event'));
+}

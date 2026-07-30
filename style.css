@@ -2266,3 +2266,77 @@ button.day-schedule-item:hover {
 #event-reminder {
   -webkit-text-fill-color: #111111 !important;
 }
+
+
+/* =====================================================
+   PATCH 20260730-3: advanced recurrence UI
+   ===================================================== */
+.event-repeat-detail {
+  margin-top: -6px;
+  margin-bottom: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.025);
+}
+.event-repeat-detail .form-group {
+  margin-bottom: 8px;
+}
+.repeat-helper-text {
+  display: block;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: -2px;
+}
+#event-repeat,
+#event-reminder,
+#event-repeat-weekday,
+#event-repeat-monthday,
+#event-repeat option,
+#event-reminder option,
+#event-repeat-weekday option,
+#event-repeat-monthday option {
+  color: #111111 !important;
+  background-color: #ffffff !important;
+  -webkit-text-fill-color: #111111 !important;
+}
+@media (max-width: 768px) {
+  .event-repeat-detail .form-row {
+    grid-template-columns: 1fr !important;
+    gap: 0 !important;
+  }
+}
+
+
+/* =====================================================
+   PATCH 20260730-4: edit scope UI and advanced interval/nth options
+   ===================================================== */
+.event-edit-scope-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  border-radius: 12px;
+  background: rgba(129, 140, 248, 0.07);
+}
+.event-edit-scope-wrap label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+#event-edit-scope,
+#event-edit-scope option,
+#event-repeat-interval-weeks,
+#event-repeat-interval-weeks option,
+#event-repeat-monthweek,
+#event-repeat-monthweek option {
+  color: #111111 !important;
+  background-color: #ffffff !important;
+  -webkit-text-fill-color: #111111 !important;
+}
+.repeat-interval-field,
+.repeat-monthweek-field {
+  min-width: 0;
+}
