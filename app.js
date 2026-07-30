@@ -1433,3 +1433,471 @@ function renderCalendar() {
   });
   if (typeof renderCalendarSearchResults === 'function') renderCalendarSearchResults();
 }
+
+
+// =====================================================
+// PATCH 20260730: recurring events, reminders, event completion
+// =====================================================
+const EVENT_REPEAT_OPTIONS_V3 = [
+  ['none', '반복 없음'],
+  ['daily', '매일'],
+  ['weekly', '매주'],
+  ['monthly', '매월'],
+  ['yearly', '매년']
+];
+const EVENT_REMINDER_OPTIONS_V3 = [
+  ['none', '알림 없음'],
+  ['at', '정시'],
+  ['10m', '10분 전'],
+  ['30m', '30분 전'],
+  ['1h', '1시간 전'],
+  ['1d', '1일 전']
+];
+const EVENT_NOTIFY_SENT_KEY_V3 = 'gs_event_notifications_sent_v3';
+let eventReminderTimerV3 = null;
+
+function ensureEventAdvancedFieldsV3() {
+  ensureEventTimeFields();
+  const colorSelect = document.getElementById('event-color');
+  if (!colorSelect || document.getElementById('event-repeat')) return;
+  const colorRow = colorSelect.closest('.form-row') || colorSelect.closest('.form-group');
+  const row = document.createElement('div');
+  row.className = 'form-row event-advanced-row';
+  row.innerHTML = `
+    <div class="form-group">
+      <label for="event-repeat">반복</label>
+      <select id="event-repeat"></select>
+    </div>
+    <div class="form-group">
+      <label for="event-reminder">알림</label>
+      <select id="event-reminder"></select>
+    </div>
+  `;
+  if (colorRow) colorRow.insertAdjacentElement('afterend', row);
+  const repeat = document.getElementById('event-repeat');
+  const reminder = document.getElementById('event-reminder');
+  EVENT_REPEAT_OPTIONS_V3.forEach(([value, label]) => repeat.insertAdjacentHTML('beforeend', `<option value="${value}">${label}</option>`));
+  EVENT_REMINDER_OPTIONS_V3.forEach(([value, label]) => reminder.insertAdjacentHTML('beforeend', `<option value="${value}">${label}</option>`));
+
+  const desc = document.getElementById('event-desc');
+  if (desc && !document.getElementById('event-completed-wrap')) {
+    const completedWrap = document.createElement('label');
+    completedWrap.id = 'event-completed-wrap';
+    completedWrap.className = 'event-completed-wrap';
+    completedWrap.innerHTML = '<input type="checkbox" id="event-completed"> <span>일정 완료</span>';
+    desc.closest('.form-group')?.insertAdjacentElement('afterend', completedWrap);
+  }
+}
+
+function getRepeatValue(evt) {
+  return evt.repeat || evt.repeatType || 'none';
+}
+
+function getEventSpanDays(evt) {
+  const s = new Date(evt.startDate);
+  const e = new Date(evt.endDate || evt.startDate);
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return 0;
+  return Math.max(0, Math.round((e - s) / 86400000));
+}
+
+function addDaysToDateString(dateStr, days) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return getLocalDateString(d);
+}
+
+function monthDiff(from, to) {
+  return (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+}
+
+function isRecurringEventOnDate(evt, dateStr) {
+  evt = migrateEventTimeFields(evt);
+  const repeat = getRepeatValue(evt);
+  if (!repeat || repeat === 'none') return isDateInRange(dateStr, evt.startDate, evt.endDate);
+  if (!evt.startDate) return false;
+  const base = new Date(evt.startDate);
+  const target = new Date(dateStr);
+  if (Number.isNaN(base.getTime()) || Number.isNaN(target.getTime())) return false;
+  if (target < new Date(getLocalDateString(base))) return false;
+
+  const span = getEventSpanDays(evt);
+  for (let offset = 0; offset <= span; offset++) {
+    const check = new Date(target);
+    check.setDate(check.getDate() - offset);
+    if (check < base) continue;
+    if (repeat === 'daily') return true;
+    if (repeat === 'weekly') {
+      const diffDays = Math.round((check - base) / 86400000);
+      if (diffDays >= 0 && diffDays % 7 === 0) return true;
+    }
+    if (repeat === 'monthly') {
+      if (check.getDate() === base.getDate() && monthDiff(base, check) >= 0) return true;
+    }
+    if (repeat === 'yearly') {
+      if (check.getMonth() === base.getMonth() && check.getDate() === base.getDate() && check.getFullYear() >= base.getFullYear()) return true;
+    }
+  }
+  return false;
+}
+
+function getOccurrenceForDate(evt, dateStr) {
+  const repeat = getRepeatValue(evt);
+  const completedMap = evt.completedOccurrences || {};
+  const occurrence = {
+    ...migrateEventTimeFields(evt),
+    occurrenceDate: dateStr,
+    occurrenceKey: `${evt.id || 'evt'}__${dateStr}`,
+    isRecurringOccurrence: repeat && repeat !== 'none',
+    completed: repeat && repeat !== 'none' ? !!completedMap[dateStr] : !!evt.completed
+  };
+  return occurrence;
+}
+
+function getEventsForDate(dateStr) {
+  return state.events
+    .map(migrateEventTimeFields)
+    .filter(e => isRecurringEventOnDate(e, dateStr))
+    .map(e => getOccurrenceForDate(e, dateStr))
+    .sort((a, b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99') || (a.title || '').localeCompare(b.title || ''));
+}
+
+function toggleEventCompleted(evt, dateStr) {
+  const id = evt.id;
+  const idx = state.events.findIndex(e => e.id === id);
+  if (idx < 0) return;
+  const original = state.events[idx];
+  const repeat = getRepeatValue(original);
+  if (repeat && repeat !== 'none') {
+    original.completedOccurrences = original.completedOccurrences || {};
+    original.completedOccurrences[dateStr] = !original.completedOccurrences[dateStr];
+  } else {
+    original.completed = !original.completed;
+  }
+  original.updatedAt = new Date().toISOString();
+  saveDataToStorage();
+  renderDashboard();
+  renderCalendar();
+  if (typeof renderCalendarSearchResults === 'function') renderCalendarSearchResults();
+}
+
+function getAllEventOccurrencesForSearchV3() {
+  const year = state.currentDate.getFullYear();
+  const start = new Date(year - 1, 0, 1);
+  const end = new Date(year + 1, 11, 31);
+  const result = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const dateStr = getLocalDateString(cursor);
+    getEventsForDate(dateStr).forEach(evt => result.push(evt));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return result;
+}
+
+function getMatchingEventsForSearch() {
+  if (!calendarSearchQuery) return [];
+  return getAllEventOccurrencesForSearchV3()
+    .filter(eventMatchesSearch)
+    .sort((a, b) => (a.occurrenceDate || a.startDate || '').localeCompare(b.occurrenceDate || b.startDate || '') || (a.startTime || '99:99').localeCompare(b.startTime || '99:99'));
+}
+
+function getReminderOffsetMinutes(value) {
+  if (value === 'at') return 0;
+  if (value === '10m') return 10;
+  if (value === '30m') return 30;
+  if (value === '1h') return 60;
+  if (value === '1d') return 1440;
+  return null;
+}
+
+function getSentNotificationMapV3() {
+  try { return JSON.parse(localStorage.getItem(EVENT_NOTIFY_SENT_KEY_V3) || '{}'); }
+  catch { return {}; }
+}
+
+function saveSentNotificationMapV3(map) {
+  localStorage.setItem(EVENT_NOTIFY_SENT_KEY_V3, JSON.stringify(map));
+}
+
+function requestNotificationPermissionV3() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+}
+
+function runEventReminderCheckV3() {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const now = new Date();
+  const sent = getSentNotificationMapV3();
+  for (let i = -1; i <= 14; i++) {
+    const dateStr = addDaysToDateString(getLocalDateString(now), i);
+    getEventsForDate(dateStr).forEach(evt => {
+      const reminder = evt.reminder || 'none';
+      const offset = getReminderOffsetMinutes(reminder);
+      if (offset === null || !evt.startTime || evt.completed) return;
+      const eventTime = new Date(`${dateStr}T${evt.startTime}:00`);
+      if (Number.isNaN(eventTime.getTime())) return;
+      const notifyAt = new Date(eventTime.getTime() - offset * 60000);
+      const diff = now.getTime() - notifyAt.getTime();
+      const key = `${evt.occurrenceKey || evt.id}_${reminder}_${dateStr}_${evt.startTime}`;
+      if (diff >= 0 && diff < 65000 && !sent[key]) {
+        new Notification(evt.title || '일정 알림', {
+          body: `${dateStr} ${formatEventTime(evt)}${evt.desc || ''}`.trim(),
+          tag: key
+        });
+        sent[key] = new Date().toISOString();
+      }
+    });
+  }
+  saveSentNotificationMapV3(sent);
+}
+
+function startEventReminderTimerV3() {
+  if (eventReminderTimerV3) return;
+  requestNotificationPermissionV3();
+  runEventReminderCheckV3();
+  eventReminderTimerV3 = setInterval(runEventReminderCheckV3, 60000);
+}
+
+function buildEventBadgeElementV3(evt) {
+  const badge = document.createElement('div');
+  badge.className = 'event-badge' + (evt.completed ? ' event-completed' : '');
+  badge.style.backgroundColor = evt.color || '#3498db';
+  badge.style.color = isLightColor(evt.color || '#3498db') ? '#111' : '#fff';
+  const repeatMark = evt.isRecurringOccurrence ? '↻ ' : '';
+  const doneMark = evt.completed ? '✓ ' : '';
+  badge.textContent = `${doneMark}${repeatMark}${formatEventTime(evt)}${evt.title}`;
+  badge.title = badge.textContent;
+  badge.addEventListener('click', ev => {
+    ev.stopPropagation();
+    openEventModal(evt);
+  });
+  return badge;
+}
+
+// Override initCalendar for repeat/reminder/completion fields
+function initCalendar() {
+  ensureEventTimeFields();
+  ensureEventColorOptionsV2();
+  ensureEventAdvancedFieldsV3();
+  ensureCalendarSearchUI();
+  loadHolidayCache();
+  loadKoreanHolidays();
+  startEventReminderTimerV3();
+
+  document.getElementById('cal-prev-month')?.addEventListener('click', () => {
+    state.currentDate.setMonth(state.currentDate.getMonth() - 1);
+    addFallbackFixedHolidaysForVisibleYear();
+    renderCalendar();
+    loadKoreanHolidays();
+  });
+  document.getElementById('cal-next-month')?.addEventListener('click', () => {
+    state.currentDate.setMonth(state.currentDate.getMonth() + 1);
+    addFallbackFixedHolidaysForVisibleYear();
+    renderCalendar();
+    loadKoreanHolidays();
+  });
+  document.getElementById('cal-today')?.addEventListener('click', () => {
+    state.currentDate = new Date();
+    renderCalendar();
+  });
+  document.getElementById('btn-add-event')?.addEventListener('click', () => openEventModal(null, getLocalDateString(new Date())));
+
+  document.getElementById('event-start-date')?.addEventListener('change', () => {
+    const s = document.getElementById('event-start-date');
+    const e = document.getElementById('event-end-date');
+    if (s && e && (!e.value || e.value < s.value)) e.value = s.value;
+  });
+
+  document.getElementById('event-form')?.addEventListener('submit', e => {
+    e.preventDefault();
+    const id = document.getElementById('event-id').value;
+    const title = document.getElementById('event-title').value.trim();
+    const startDate = document.getElementById('event-start-date').value;
+    const endDate = document.getElementById('event-end-date').value;
+    const startTime = document.getElementById('event-start-time')?.value || '';
+    const endTime = document.getElementById('event-end-time')?.value || '';
+    const color = document.getElementById('event-color').value;
+    const desc = document.getElementById('event-desc').value.trim();
+    const repeat = document.getElementById('event-repeat')?.value || 'none';
+    const reminder = document.getElementById('event-reminder')?.value || 'none';
+    const completed = !!document.getElementById('event-completed')?.checked;
+    if (!title) return alert('일정 제목을 입력해주세요.');
+    if (startDate > endDate) return alert('종료일은 시작일보다 빠를 수 없습니다.');
+    if (startDate === endDate && startTime && endTime && endTime < startTime) return alert('같은 날짜에서는 종료시간이 시작시간보다 빠를 수 없습니다.');
+    if (reminder !== 'none' && !startTime) return alert('알림을 사용하려면 시작시간을 입력해주세요.');
+    const old = state.events.find(x => x.id === id) || {};
+    const eventData = {
+      ...old,
+      id: id || 'evt_' + Date.now(),
+      title, startDate, endDate, startTime, endTime, color, desc, repeat, reminder, completed,
+      updatedAt: new Date().toISOString()
+    };
+    if (repeat === 'none') delete eventData.completedOccurrences;
+    const idx = state.events.findIndex(x => x.id === id);
+    if (idx >= 0) state.events[idx] = eventData;
+    else state.events.push(eventData);
+    if (reminder !== 'none') requestNotificationPermissionV3();
+    saveDataToStorage();
+    renderDashboard();
+    renderCalendar();
+    renderCalendarSearchResults();
+    closeModal(document.getElementById('modal-event'));
+  });
+
+  document.getElementById('btn-delete-event')?.addEventListener('click', () => {
+    const id = document.getElementById('event-id').value;
+    if (!id || !confirm('일정을 삭제하시겠습니까? 반복 일정이면 전체 반복 일정이 삭제됩니다.')) return;
+    state.events = state.events.filter(e => e.id !== id);
+    saveDataToStorage();
+    renderDashboard();
+    renderCalendar();
+    renderCalendarSearchResults();
+    closeModal(document.getElementById('modal-event'));
+  });
+  document.getElementById('btn-cancel-event')?.addEventListener('click', () => closeModal(document.getElementById('modal-event')));
+}
+
+// Override day schedule modal with completion toggle
+function openDayScheduleModal(dateStr) {
+  const modal = ensureDayScheduleModal();
+  const title = document.getElementById('day-schedule-title');
+  const list = document.getElementById('day-schedule-list');
+  const d = new Date(dateStr);
+  const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
+  const displayDate = Number.isNaN(d.getTime()) ? dateStr : `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${weekdays[d.getDay()]})`;
+  if (title) title.textContent = `${displayDate} 일정`;
+  if (!list) return;
+  list.innerHTML = '';
+  const holidays = typeof getHolidaysForDate === 'function' ? getHolidaysForDate(dateStr) : [];
+  const events = getEventsForDate(dateStr);
+  if (!holidays.length && !events.length) {
+    list.innerHTML = '<div class="day-schedule-empty">등록된 일정이 없습니다.</div>';
+    openModal(modal);
+    return;
+  }
+  holidays.forEach(name => {
+    const item = document.createElement('div');
+    item.className = 'day-schedule-item holiday-detail-item';
+    item.innerHTML = `<div class="day-schedule-color holiday-dot"></div><div class="day-schedule-body"><div class="day-schedule-name">${escapeHTML(name)}</div><div class="day-schedule-meta">공휴일</div></div>`;
+    list.appendChild(item);
+  });
+  events.forEach(evt => {
+    const item = document.createElement('div');
+    item.className = 'day-schedule-item day-event-item' + (evt.completed ? ' day-event-completed' : '');
+    item.innerHTML = `
+      <button type="button" class="day-complete-toggle" title="완료 체크">${evt.completed ? '✓' : ''}</button>
+      <span class="day-schedule-color" style="background:${evt.color || '#3498db'}"></span>
+      <button type="button" class="day-schedule-open">
+        <span class="day-schedule-body">
+          <strong class="day-schedule-name">${escapeHTML(evt.title || '제목 없음')}</strong>
+          <span class="day-schedule-meta">${evt.isRecurringOccurrence ? '↻ 반복 | ' : ''}${evt.reminder && evt.reminder !== 'none' ? '🔔 알림 | ' : ''}${escapeHTML(formatEventTime(evt))}${escapeHTML(evt.occurrenceDate || evt.startDate || '')}</span>
+          ${evt.desc ? `<span class="day-schedule-desc">${escapeHTML(evt.desc)}</span>` : ''}
+        </span>
+      </button>
+    `;
+    item.querySelector('.day-complete-toggle')?.addEventListener('click', () => {
+      toggleEventCompleted(evt, dateStr);
+      openDayScheduleModal(dateStr);
+    });
+    item.querySelector('.day-schedule-open')?.addEventListener('click', () => {
+      closeModal(modal);
+      openEventModal(evt);
+    });
+    list.appendChild(item);
+  });
+  openModal(modal);
+}
+
+// Override renderCalendar to use recurring occurrences and completion state
+function renderCalendar() {
+  const year = state.currentDate.getFullYear();
+  const month = state.currentDate.getMonth();
+  const header = document.getElementById('calendar-month-year');
+  const grid = document.getElementById('calendar-grid');
+  if (header) header.textContent = `${year}년 ${month + 1}월`;
+  if (!grid) return;
+  grid.innerHTML = '';
+  const firstDayIndex = new Date(year, month, 1).getDay();
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const prevLastDay = new Date(year, month, 0).getDate();
+  const cells = [];
+  for (let x = firstDayIndex; x > 0; x--) {
+    const day = prevLastDay - x + 1;
+    cells.push({ day, dateStr: getLocalDateString(new Date(year, month - 1, day)), isOtherMonth: true });
+  }
+  for (let i = 1; i <= lastDay; i++) cells.push({ day: i, dateStr: getLocalDateString(new Date(year, month, i)), isOtherMonth: false });
+  while (cells.length < 42) {
+    const day = cells.length - firstDayIndex - lastDay + 1;
+    cells.push({ day, dateStr: getLocalDateString(new Date(year, month + 1, day)), isOtherMonth: true });
+  }
+  const today = getLocalDateString(new Date());
+  state.events = state.events.map(migrateEventTimeFields);
+  cells.forEach(cell => {
+    const cellEl = document.createElement('div');
+    cellEl.className = 'calendar-cell';
+    if (cell.isOtherMonth) cellEl.classList.add('other-month');
+    if (cell.dateStr === today) cellEl.classList.add('today');
+    const weekday = ['일', '월', '화', '수', '목', '금', '토'][new Date(cell.dateStr).getDay()];
+    cellEl.innerHTML = `<div class="cell-date-header"><span class="cell-num">${cell.day}</span><span class="cell-weekday">${weekday}</span></div><div class="cell-events"></div>`;
+    const eventsContainer = cellEl.querySelector('.cell-events');
+    const holidays = typeof getHolidaysForDate === 'function' ? getHolidaysForDate(cell.dateStr) : [];
+    holidays.forEach(name => {
+      if (calendarSearchQuery && !String(name).toLowerCase().includes(calendarSearchQuery)) return;
+      const holiday = document.createElement('div');
+      holiday.className = 'event-badge holiday-badge';
+      holiday.textContent = name;
+      holiday.title = `공휴일: ${name}`;
+      eventsContainer.appendChild(holiday);
+    });
+    getEventsForDate(cell.dateStr)
+      .filter(eventMatchesSearch)
+      .forEach(evt => eventsContainer.appendChild(buildEventBadgeElementV3(evt)));
+    cellEl.addEventListener('click', () => openDayScheduleModal(cell.dateStr));
+    grid.appendChild(cellEl);
+  });
+  if (typeof renderCalendarSearchResults === 'function') renderCalendarSearchResults();
+}
+
+// Override modal open for repeat/reminder/completion values
+function openEventModal(eventObj = null, defaultDateStr = null) {
+  ensureEventTimeFields();
+  ensureEventColorOptionsV2();
+  ensureEventAdvancedFieldsV3();
+  const form = document.getElementById('event-form');
+  const deleteBtn = document.getElementById('btn-delete-event');
+  const titleHeader = document.getElementById('modal-event-title');
+  if (form) form.reset();
+  const selectedDate = defaultDateStr || getLocalDateString(new Date());
+  if (eventObj) {
+    eventObj = migrateEventTimeFields(eventObj);
+    if (titleHeader) titleHeader.textContent = eventObj.isRecurringOccurrence ? '반복 일정 수정' : '일정 수정';
+    document.getElementById('event-id').value = eventObj.id;
+    document.getElementById('event-title').value = eventObj.title || '';
+    document.getElementById('event-start-date').value = eventObj.startDate || selectedDate;
+    document.getElementById('event-end-date').value = eventObj.endDate || eventObj.startDate || selectedDate;
+    document.getElementById('event-start-time').value = eventObj.startTime || '';
+    document.getElementById('event-end-time').value = eventObj.endTime || '';
+    const select = document.getElementById('event-color');
+    if (select) select.value = EVENT_COLOR_OPTIONS_V2.some(([v]) => v === eventObj.color) ? eventObj.color : '#3498db';
+    document.getElementById('event-repeat').value = getRepeatValue(eventObj);
+    document.getElementById('event-reminder').value = eventObj.reminder || 'none';
+    document.getElementById('event-completed').checked = !!eventObj.completed;
+    document.getElementById('event-desc').value = eventObj.desc || '';
+    deleteBtn?.classList.remove('hidden');
+  } else {
+    if (titleHeader) titleHeader.textContent = '새 일정 추가';
+    document.getElementById('event-id').value = '';
+    document.getElementById('event-start-date').value = selectedDate;
+    document.getElementById('event-end-date').value = selectedDate;
+    document.getElementById('event-start-time').value = '';
+    document.getElementById('event-end-time').value = '';
+    const select = document.getElementById('event-color');
+    if (select) select.value = '#3498db';
+    document.getElementById('event-repeat').value = 'none';
+    document.getElementById('event-reminder').value = 'none';
+    document.getElementById('event-completed').checked = false;
+    document.getElementById('event-desc').value = '';
+    deleteBtn?.classList.add('hidden');
+  }
+  openModal(document.getElementById('modal-event'));
+}
