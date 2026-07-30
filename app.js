@@ -2784,3 +2784,83 @@ function openEventModal(eventObj = null, defaultDateStr = null) {
   updateRepeatDetailVisibilityV4();
   openModal(document.getElementById('modal-event'));
 }
+
+
+// =====================================================
+// PATCH 20260730-5: Add event button inside selected-day schedule list
+// =====================================================
+function appendDayScheduleAddButtonV6(list, modal, dateStr) {
+  if (!list) return;
+  const addWrap = document.createElement('div');
+  addWrap.className = 'day-schedule-add-row';
+  addWrap.innerHTML = `
+    <button type="button" class="btn btn-primary day-schedule-add-btn">
+      <i class="fa-solid fa-plus"></i> 이 날짜에 일정 추가
+    </button>
+  `;
+  addWrap.querySelector('.day-schedule-add-btn')?.addEventListener('click', () => {
+    closeModal(modal);
+    openEventModal(null, dateStr);
+  });
+  list.appendChild(addWrap);
+}
+
+// Override day schedule modal: show list + add button at the bottom
+function openDayScheduleModal(dateStr) {
+  const modal = ensureDayScheduleModal();
+  const title = document.getElementById('day-schedule-title');
+  const list = document.getElementById('day-schedule-list');
+  const d = new Date(dateStr);
+  const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
+  const displayDate = Number.isNaN(d.getTime()) ? dateStr : `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${weekdays[d.getDay()]})`;
+  if (title) title.textContent = `${displayDate} 일정`;
+  if (!list) return;
+  list.innerHTML = '';
+
+  const holidays = typeof getHolidaysForDate === 'function' ? getHolidaysForDate(dateStr) : [];
+  const events = typeof getEventsForDate === 'function' ? getEventsForDate(dateStr) : [];
+
+  if (!holidays.length && !events.length) {
+    list.innerHTML = '<div class="day-schedule-empty">등록된 일정이 없습니다.</div>';
+    appendDayScheduleAddButtonV6(list, modal, dateStr);
+    openModal(modal);
+    return;
+  }
+
+  holidays.forEach(name => {
+    const item = document.createElement('div');
+    item.className = 'day-schedule-item holiday-detail-item';
+    item.innerHTML = `<div class="day-schedule-color holiday-dot"></div><div class="day-schedule-body"><div class="day-schedule-name">${escapeHTML(name)}</div><div class="day-schedule-meta">공휴일</div></div>`;
+    list.appendChild(item);
+  });
+
+  events.forEach(evt => {
+    const item = document.createElement('div');
+    item.className = 'day-schedule-item day-event-item' + (evt.completed ? ' day-event-completed' : '');
+    item.innerHTML = `
+      <button type="button" class="day-complete-toggle" title="완료 체크">${evt.completed ? '✓' : ''}</button>
+      <span class="day-schedule-color" style="background:${evt.color || '#3498db'}"></span>
+      <button type="button" class="day-schedule-open">
+        <span class="day-schedule-body">
+          <strong class="day-schedule-name">${escapeHTML(evt.title || '제목 없음')}</strong>
+          <span class="day-schedule-meta">${evt.isRecurringOccurrence ? '↻ 반복 | ' : ''}${evt.reminder && evt.reminder !== 'none' ? '🔔 알림 | ' : ''}${escapeHTML(formatEventTime(evt))}${escapeHTML(evt.occurrenceDate || evt.startDate || '')}</span>
+          ${evt.desc ? `<span class="day-schedule-desc">${escapeHTML(evt.desc)}</span>` : ''}
+        </span>
+      </button>
+    `;
+    item.querySelector('.day-complete-toggle')?.addEventListener('click', () => {
+      if (typeof toggleEventCompleted === 'function') {
+        toggleEventCompleted(evt, dateStr);
+        openDayScheduleModal(dateStr);
+      }
+    });
+    item.querySelector('.day-schedule-open')?.addEventListener('click', () => {
+      closeModal(modal);
+      openEventModal(evt);
+    });
+    list.appendChild(item);
+  });
+
+  appendDayScheduleAddButtonV6(list, modal, dateStr);
+  openModal(modal);
+}
