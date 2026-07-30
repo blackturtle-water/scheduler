@@ -11,7 +11,7 @@
     <!-- Font Awesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Main Style Sheet -->
-    <link rel="stylesheet" href="style.css?v=20260730-5">
+    <link rel="stylesheet" href="style.css?v=20260730-6">
 </head>
 <body>
     <!-- Background Glow Effects -->
@@ -29,11 +29,11 @@
             </div>
             
             <nav class="sidebar-nav">
-                <button class="nav-btn active" data-tab="dashboard">
+                <button class="nav-btn" data-tab="dashboard">
                     <i class="fa-solid fa-chart-pie"></i>
                     <span>대시보드</span>
                 </button>
-                <button class="nav-btn" data-tab="calendar">
+                <button class="nav-btn active" data-tab="calendar">
                     <i class="fa-solid fa-calendar-days"></i>
                     <span>달력 일정</span>
                 </button>
@@ -64,7 +64,7 @@
         <main class="main-content">
             <!-- HEADER -->
             <header class="content-header">
-                <h1 id="page-title">대시보드</h1>
+                <h1 id="page-title">달력 일정</h1>
                 <div class="header-actions">
                     <div class="current-time" id="header-time">2026. 07. 15. (수)</div>
                     <button class="btn btn-primary btn-sm" id="btn-quick-add">
@@ -74,7 +74,7 @@
             </header>
 
             <!-- TAB CONTENT: DASHBOARD -->
-            <section class="tab-panel active" id="tab-dashboard">
+            <section class="tab-panel" id="tab-dashboard">
                 <div class="dashboard-grid">
                     <!-- Column 1: Progress & Today Stats -->
                     <div class="dashboard-card card-progress">
@@ -133,7 +133,7 @@
             </section>
 
             <!-- TAB CONTENT: CALENDAR -->
-            <section class="tab-panel" id="tab-calendar">
+            <section class="tab-panel active" id="tab-calendar">
                 <div class="calendar-container">
                     <div class="calendar-header">
                         <div class="calendar-nav">
@@ -394,7 +394,7 @@
     </div>
 
     <!-- Main JavaScript Logic Files -->
-    <script src="./github-sync.js?v=20260730-5"></script>
-    <script src="./app.js?v=20260730-5"></script>
+    <script src="./github-sync.js?v=20260730-6"></script>
+    <script src="./app.js?v=20260730-6"></script>
 </body>
 </html>
