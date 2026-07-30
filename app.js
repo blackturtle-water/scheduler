@@ -2866,299 +2866,6 @@ function openDayScheduleModal(dateStr) {
 }
 
 // =====================================================
-// PATCH 20260730-6: Calendar-first launch, automatic merge sync,
-// deletion tombstones, and robust holiday refresh
-// =====================================================
-(function () {
-  const PATCH_VERSION = '20260730-6';
-  const AUTO_SYNC_ENABLED_KEY = 'gs_auto_sync_enabled_v1';
-  const DELETED_IDS_KEY = 'gs_deleted_tombstones_v1';
-  const AUTO_SYNC_INTERVAL_MS = 30000;
-  const AUTO_UPLOAD_DEBOUNCE_MS = 2500;
-
-  let knownIdsSnapshotV6 = null;
-  let autoUploadTimerV6 = null;
-  let autoPollTimerV6 = null;
-  let isAutoSyncingV6 = false;
-  let lastAutoSyncAtV6 = 0;
-
-  function getCollectionIdsV6() {
-    return {
-      events: new Set((state.events || []).map(x => x && x.id).filter(Boolean)),
-      todos: new Set((state.todos || []).map(x => x && x.id).filter(Boolean)),
-      notes: new Set((state.notes || []).map(x => x && x.id).filter(Boolean)),
-      ddays: new Set((state.ddays || []).map(x => x && x.id).filter(Boolean))
-    };
-  }
-
-  function cloneIdsSnapshotV6(snapshot) {
-    const out = {};
-    ['events', 'todos', 'notes', 'ddays'].forEach(k => out[k] = new Set(snapshot?.[k] || []));
-    return out;
-  }
-
-  function loadDeletedIdsV6() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(DELETED_IDS_KEY) || '{}');
-      return {
-        events: raw.events || {},
-        todos: raw.todos || {},
-        notes: raw.notes || {},
-        ddays: raw.ddays || {}
-      };
-    } catch {
-      return { events: {}, todos: {}, notes: {}, ddays: {} };
-    }
-  }
-
-  function saveDeletedIdsV6(deletedIds) {
-    localStorage.setItem(DELETED_IDS_KEY, JSON.stringify(deletedIds || { events: {}, todos: {}, notes: {}, ddays: {} }));
-  }
-
-  function rememberDeletedItemsV6() {
-    if (!knownIdsSnapshotV6) {
-      knownIdsSnapshotV6 = cloneIdsSnapshotV6(getCollectionIdsV6());
-      return;
-    }
-    const now = new Date().toISOString();
-    const current = getCollectionIdsV6();
-    const deleted = loadDeletedIdsV6();
-    ['events', 'todos', 'notes', 'ddays'].forEach(type => {
-      knownIdsSnapshotV6[type].forEach(id => {
-        if (!current[type].has(id)) deleted[type][id] = now;
-      });
-    });
-    saveDeletedIdsV6(deleted);
-    knownIdsSnapshotV6 = cloneIdsSnapshotV6(current);
-  }
-
-  function mergeDeletedMapsV6(a = {}, b = {}) {
-    const out = { ...(a || {}) };
-    Object.entries(b || {}).forEach(([id, ts]) => {
-      if (!out[id] || new Date(ts).getTime() > new Date(out[id]).getTime()) out[id] = ts;
-    });
-    return out;
-  }
-
-  function isDeletedNewerThanItemV6(deletedAt, item) {
-    if (!deletedAt) return false;
-    const del = new Date(deletedAt).getTime();
-    const upd = item?.updatedAt ? new Date(item.updatedAt).getTime() : 0;
-    return Number.isFinite(del) && del >= upd;
-  }
-
-  function mergeCollectionWithDeletesV6(localArr = [], remoteArr = [], deletedMap = {}) {
-    const map = new Map();
-    [...(localArr || []), ...(remoteArr || [])].forEach(item => {
-      if (!item) return;
-      const id = item.id || `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-      const candidate = { ...item, id };
-      const existing = map.get(id);
-      if (!existing) {
-        map.set(id, candidate);
-        return;
-      }
-      const a = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-      const b = candidate.updatedAt ? new Date(candidate.updatedAt).getTime() : 0;
-      if (b >= a) map.set(id, candidate);
-    });
-    Array.from(map.keys()).forEach(id => {
-      if (isDeletedNewerThanItemV6(deletedMap[id], map.get(id))) map.delete(id);
-    });
-    return Array.from(map.values());
-  }
-
-  const originalGetFullAppStateV6 = window.getFullAppState || getFullAppState;
-  window.getFullAppState = function () {
-    const data = originalGetFullAppStateV6();
-    return {
-      ...data,
-      deletedIds: loadDeletedIdsV6(),
-      syncVersion: PATCH_VERSION
-    };
-  };
-  getFullAppState = window.getFullAppState;
-
-  window.mergeAppData = function (localData, remoteData) {
-    const local = normalizeAppData(localData || {});
-    const remote = normalizeAppData(remoteData || {});
-    const deletedIds = {
-      events: mergeDeletedMapsV6(localData?.deletedIds?.events, remoteData?.deletedIds?.events),
-      todos: mergeDeletedMapsV6(localData?.deletedIds?.todos, remoteData?.deletedIds?.todos),
-      notes: mergeDeletedMapsV6(localData?.deletedIds?.notes, remoteData?.deletedIds?.notes),
-      ddays: mergeDeletedMapsV6(localData?.deletedIds?.ddays, remoteData?.deletedIds?.ddays)
-    };
-    return {
-      events: mergeCollectionWithDeletesV6(local.events, remote.events, deletedIds.events).map(migrateEventTimeFields),
-      todos: mergeCollectionWithDeletesV6(local.todos, remote.todos, deletedIds.todos),
-      notes: mergeCollectionWithDeletesV6(local.notes, remote.notes, deletedIds.notes),
-      ddays: mergeCollectionWithDeletesV6(local.ddays, remote.ddays, deletedIds.ddays),
-      deletedIds,
-      updatedAt: new Date().toISOString(),
-      syncVersion: PATCH_VERSION
-    };
-  };
-  mergeAppData = window.mergeAppData;
-
-  const originalRestoreFullAppStateV6 = window.restoreFullAppState || restoreFullAppState;
-  window.restoreFullAppState = function (data) {
-    if (data?.deletedIds) saveDeletedIdsV6(data.deletedIds);
-    originalRestoreFullAppStateV6(data);
-    knownIdsSnapshotV6 = cloneIdsSnapshotV6(getCollectionIdsV6());
-  };
-  restoreFullAppState = window.restoreFullAppState;
-
-  const originalSaveDataToStorageV6 = window.saveDataToStorage || saveDataToStorage;
-  window.saveDataToStorage = function () {
-    rememberDeletedItemsV6();
-    originalSaveDataToStorageV6();
-    scheduleAutoSyncV6('local-change');
-  };
-  saveDataToStorage = window.saveDataToStorage;
-
-  function isCloudConfiguredV6() {
-    return typeof GithubSync !== 'undefined' && GithubSync.getSettings().pat;
-  }
-
-  function markAutoSyncEnabledV6() {
-    if (isCloudConfiguredV6()) localStorage.setItem(AUTO_SYNC_ENABLED_KEY, '1');
-  }
-
-  function isAutoSyncEnabledV6() {
-    return localStorage.getItem(AUTO_SYNC_ENABLED_KEY) === '1' && isCloudConfiguredV6();
-  }
-
-  function setAutoSyncStatusV6(message, mode = 'online', autoHide = true) {
-    updateSyncIndicator(mode);
-    if (typeof setMobileSyncStatus === 'function') setMobileSyncStatus(message, mode, autoHide);
-  }
-
-  async function runAutoMergeSyncV6(reason = 'auto') {
-    if (!isAutoSyncEnabledV6() || isAutoSyncingV6) return;
-    const now = Date.now();
-    if (reason === 'poll' && now - lastAutoSyncAtV6 < 12000) return;
-    isAutoSyncingV6 = true;
-    lastAutoSyncAtV6 = now;
-    try {
-      setAutoSyncStatusV6('자동 동기화 중...', 'syncing', false);
-      assertCloudReady();
-      const localData = getFullAppState();
-      let remoteData = null;
-      try { remoteData = await GithubSync.downloadData(); } catch { remoteData = null; }
-      const finalData = remoteData && countAppData(remoteData) > 0 ? mergeAppData(localData, remoteData) : localData;
-      restoreFullAppState(finalData);
-      await GithubSync.uploadData(getFullAppState());
-      localStorage.setItem(GithubSync.KEYS.LAST_SYNC, new Date().toISOString());
-      renderSyncLogBox();
-      setAutoSyncStatusV6('자동 동기화 완료', 'online');
-    } catch (err) {
-      console.warn('자동 동기화 실패:', err);
-      updateSyncIndicator('offline');
-      if (typeof setMobileSyncStatus === 'function') setMobileSyncStatus('자동 동기화 실패 | ' + err.message, 'offline', false);
-    } finally {
-      isAutoSyncingV6 = false;
-    }
-  }
-
-  function scheduleAutoSyncV6(reason = 'local-change') {
-    if (!isAutoSyncEnabledV6()) return;
-    clearTimeout(autoUploadTimerV6);
-    autoUploadTimerV6 = setTimeout(() => runAutoMergeSyncV6(reason), AUTO_UPLOAD_DEBOUNCE_MS);
-  }
-  window.scheduleAutoSyncV6 = scheduleAutoSyncV6;
-
-  function startAutoSyncLoopV6() {
-    if (!isCloudConfiguredV6()) return;
-    markAutoSyncEnabledV6();
-    if (!autoPollTimerV6) {
-      autoPollTimerV6 = setInterval(() => runAutoMergeSyncV6('poll'), AUTO_SYNC_INTERVAL_MS);
-    }
-    setTimeout(() => runAutoMergeSyncV6('startup'), 1200);
-  }
-
-  const originalExecuteGitHubSyncV6 = window.executeGitHubSync || executeGitHubSync;
-  window.executeGitHubSync = async function () {
-    markAutoSyncEnabledV6();
-    await originalExecuteGitHubSyncV6();
-    startAutoSyncLoopV6();
-  };
-  executeGitHubSync = window.executeGitHubSync;
-
-  const originalUploadToCloudV6 = window.uploadToCloud || uploadToCloud;
-  window.uploadToCloud = async function () {
-    markAutoSyncEnabledV6();
-    await originalUploadToCloudV6();
-    startAutoSyncLoopV6();
-  };
-  uploadToCloud = window.uploadToCloud;
-
-  const originalDownloadFromCloudV6 = window.downloadFromCloud || downloadFromCloud;
-  window.downloadFromCloud = async function () {
-    markAutoSyncEnabledV6();
-    await originalDownloadFromCloudV6();
-    startAutoSyncLoopV6();
-  };
-  downloadFromCloud = window.downloadFromCloud;
-
-  function openCalendarFirstV6() {
-    const calendarBtn = document.querySelector('.nav-btn[data-tab="calendar"]');
-    const dashboardBtn = document.querySelector('.nav-btn[data-tab="dashboard"]');
-    const dashboardPanel = document.getElementById('tab-dashboard');
-    const calendarPanel = document.getElementById('tab-calendar');
-    dashboardBtn?.classList.remove('active');
-    dashboardPanel?.classList.remove('active');
-    calendarBtn?.classList.add('active');
-    calendarPanel?.classList.add('active');
-    const pageTitle = document.getElementById('page-title');
-    if (pageTitle) pageTitle.textContent = '달력 일정';
-    if (typeof renderCalendar === 'function') renderCalendar();
-  }
-
-  function hasHolidayForVisibleYearV6() {
-    const y = state.currentDate.getFullYear();
-    return Object.keys(krHolidayMap || {}).some(date => date.startsWith(String(y) + '-'));
-  }
-
-  window.loadKoreanHolidays = async function () {
-    loadHolidayCache();
-    if (hasHolidayForVisibleYearV6()) {
-      renderCalendar();
-      return;
-    }
-    try {
-      const res = await fetch('https://holidays.hyunbin.page/basic.json?ts=' + String(new Date().getFullYear()), { cache: 'no-cache' });
-      if (!res.ok) throw new Error('holiday fetch failed');
-      const data = await res.json();
-      const normalized = {};
-      Object.entries(data || {}).forEach(([date, value]) => {
-        normalized[date] = Array.isArray(value) ? value : [String(value)];
-      });
-      krHolidayMap = normalized;
-      localStorage.setItem(HOLIDAY_CACHE_KEY, JSON.stringify({ updatedAt: new Date().toISOString(), data: krHolidayMap }));
-    } catch (err) {
-      console.warn('공휴일 자동 로드 실패, 고정 공휴일 임시 표시:', err);
-      addFallbackFixedHolidaysForVisibleYear();
-    }
-    renderCalendar();
-  };
-  loadKoreanHolidays = window.loadKoreanHolidays;
-
-  document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(() => {
-      knownIdsSnapshotV6 = cloneIdsSnapshotV6(getCollectionIdsV6());
-      openCalendarFirstV6();
-      if (isCloudConfiguredV6()) startAutoSyncLoopV6();
-      const form = document.getElementById('github-sync-form');
-      form?.addEventListener('submit', () => setTimeout(startAutoSyncLoopV6, 500));
-      document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) runAutoMergeSyncV6('focus');
-      });
-      window.addEventListener('online', () => runAutoMergeSyncV6('online'));
-    }, 0);
-  });
-})();
-
-// =====================================================
 // PATCH 20260730-7: stable holiday rendering and Constitution Day override
 // - Prevent fallback holidays from wiping fetched lunar/substitute holidays.
 // - Reload holidays by visible year instead of one-time holidayLoadStarted flag.
@@ -3440,5 +3147,47 @@ const LUNAR_HOLIDAY_OVERRIDES_V8 = {
       if (typeof renderCalendar === 'function') renderCalendar();
       loadKoreanHolidays();
     }, 80);
+  });
+})();
+
+// =====================================================
+// PATCH 20260730-manual-sync: disable automatic cloud sync
+// - Keep data in localStorage only when edited.
+// - Cloud upload/download/merge buttons remain manual.
+// - Remove auto-sync enable flags left from older builds.
+// =====================================================
+(function () {
+  const appId = window.GS_APP_ID || 'default';
+  const possibleKeys = [
+    'gs_auto_sync_enabled_v1',
+    `${appId}__gs_auto_sync_enabled_v1`,
+    'scheduler_hyunji__gs_auto_sync_enabled_v1'
+  ];
+
+  function clearAutoSyncFlags() {
+    possibleKeys.forEach(key => {
+      try { localStorage.removeItem(key); } catch {}
+    });
+  }
+
+  clearAutoSyncFlags();
+
+  window.scheduleAutoSyncV6 = function () {};
+  if (typeof AutoSync !== 'undefined') {
+    AutoSync.scheduleUpload = function () {};
+  }
+
+  // Re-override saveDataToStorage so local edits do not trigger cloud sync.
+  window.saveDataToStorage = function () {
+    saveDataToStorageOnly();
+  };
+  saveDataToStorage = window.saveDataToStorage;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    clearAutoSyncFlags();
+    const syncText = document.getElementById('sidebar-sync-text');
+    if (syncText && typeof GithubSync !== 'undefined' && GithubSync.isConfigured()) {
+      syncText.textContent = '수동 동기화';
+    }
   });
 })();
