@@ -3262,3 +3262,183 @@ function openDayScheduleModal(dateStr) {
     }, 50);
   });
 })();
+
+// =====================================================
+// PATCH 20260730-8: holiday label normalization + lunar holiday fallback
+// - Rename 기독탄신일 to 크리스마스.
+// - Add embedded Seollal/Chuseok holiday fallback for 2026-2035.
+// - Ensure fetched data, fixed data, and embedded lunar data are merged, not overwritten.
+// =====================================================
+(function () {
+  const HOLIDAY_PATCH_VERSION_V8 = '20260730-8';
+const LUNAR_HOLIDAY_OVERRIDES_V8 = {
+  '2026-02-16': ['설날'],
+  '2026-02-17': ['설날'],
+  '2026-02-18': ['설날'],
+  '2026-09-24': ['추석'],
+  '2026-09-25': ['추석'],
+  '2026-09-26': ['추석'],
+  '2026-09-28': ['대체공휴일 (추석)'],
+  '2027-02-06': ['설날'],
+  '2027-02-07': ['설날'],
+  '2027-02-08': ['설날'],
+  '2027-02-09': ['대체공휴일 (설날)'],
+  '2027-09-14': ['추석'],
+  '2027-09-15': ['추석'],
+  '2027-09-16': ['추석'],
+  '2028-01-26': ['설날'],
+  '2028-01-27': ['설날'],
+  '2028-01-28': ['설날'],
+  '2028-10-02': ['추석'],
+  '2028-10-03': ['추석'],
+  '2028-10-04': ['추석'],
+  '2029-02-12': ['설날'],
+  '2029-02-13': ['설날'],
+  '2029-02-14': ['설날'],
+  '2029-09-21': ['추석'],
+  '2029-09-22': ['추석'],
+  '2029-09-23': ['추석'],
+  '2029-09-24': ['대체공휴일 (추석)'],
+  '2030-02-02': ['설날'],
+  '2030-02-03': ['설날'],
+  '2030-02-04': ['설날'],
+  '2030-02-05': ['대체공휴일 (설날)'],
+  '2030-09-11': ['추석'],
+  '2030-09-12': ['추석'],
+  '2030-09-13': ['추석'],
+  '2031-01-22': ['설날'],
+  '2031-01-23': ['설날'],
+  '2031-01-24': ['설날'],
+  '2031-09-30': ['추석'],
+  '2031-10-01': ['추석'],
+  '2031-10-02': ['추석'],
+  '2032-02-10': ['설날'],
+  '2032-02-11': ['설날'],
+  '2032-02-12': ['설날'],
+  '2032-09-18': ['추석'],
+  '2032-09-19': ['추석'],
+  '2032-09-20': ['추석'],
+  '2032-09-21': ['대체공휴일 (추석)'],
+  '2033-01-30': ['설날'],
+  '2033-01-31': ['설날'],
+  '2033-02-01': ['설날'],
+  '2033-02-02': ['대체공휴일 (설날)'],
+  '2033-09-07': ['추석'],
+  '2033-09-08': ['추석'],
+  '2033-09-09': ['추석'],
+  '2034-02-18': ['설날'],
+  '2034-02-19': ['설날'],
+  '2034-02-20': ['설날'],
+  '2034-02-21': ['대체공휴일 (설날)'],
+  '2034-09-26': ['추석'],
+  '2034-09-27': ['추석'],
+  '2034-09-28': ['추석'],
+  '2035-02-07': ['설날'],
+  '2035-02-08': ['설날'],
+  '2035-02-09': ['설날'],
+  '2035-09-15': ['추석'],
+  '2035-09-16': ['추석'],
+  '2035-09-17': ['추석'],
+  '2035-09-18': ['대체공휴일 (추석)'],
+};
+
+  const HOLIDAY_LABEL_ALIASES_V8 = {
+    '기독탄신일': '크리스마스',
+    '성탄절': '크리스마스',
+    '크리스마스': '크리스마스'
+  };
+
+  function normalizeHolidayNameV8(name) {
+    const text = String(name || '').trim();
+    return HOLIDAY_LABEL_ALIASES_V8[text] || text;
+  }
+
+  function normalizeHolidayValueV8(value) {
+    const arr = Array.isArray(value) ? value : (value ? [value] : []);
+    return Array.from(new Set(arr.map(normalizeHolidayNameV8).filter(Boolean)));
+  }
+
+  function mergeHolidayMapV8(base, additions) {
+    const target = base || {};
+    Object.entries(additions || {}).forEach(([date, value]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+      const incoming = normalizeHolidayValueV8(value);
+      if (!incoming.length) return;
+      const existing = normalizeHolidayValueV8(target[date]);
+      target[date] = Array.from(new Set([...existing, ...incoming]));
+    });
+    return target;
+  }
+
+  function normalizeEntireHolidayMapV8() {
+    const normalized = {};
+    Object.entries(krHolidayMap || {}).forEach(([date, value]) => {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) normalized[date] = normalizeHolidayValueV8(value);
+    });
+    krHolidayMap = normalized;
+  }
+
+  function applyFixedAndLunarOverridesV8(year) {
+    if (!year || Number.isNaN(Number(year))) return;
+    const fixed = {};
+    fixed[`${year}-01-01`] = ['신정'];
+    fixed[`${year}-03-01`] = ['삼일절'];
+    fixed[`${year}-05-05`] = ['어린이날'];
+    fixed[`${year}-06-06`] = ['현충일'];
+    fixed[`${year}-08-15`] = ['광복절'];
+    fixed[`${year}-10-03`] = ['개천절'];
+    fixed[`${year}-10-09`] = ['한글날'];
+    fixed[`${year}-12-25`] = ['크리스마스'];
+    if (Number(year) >= 2026) fixed[`${year}-07-17`] = ['제헌절'];
+
+    krHolidayMap = mergeHolidayMapV8(krHolidayMap || {}, fixed);
+    krHolidayMap = mergeHolidayMapV8(krHolidayMap || {}, LUNAR_HOLIDAY_OVERRIDES_V8);
+    normalizeEntireHolidayMapV8();
+  }
+
+  window.addFallbackFixedHolidaysForVisibleYear = function () {
+    applyFixedAndLunarOverridesV8(state.currentDate.getFullYear());
+  };
+  addFallbackFixedHolidaysForVisibleYear = window.addFallbackFixedHolidaysForVisibleYear;
+
+  const previousLoadKoreanHolidaysV8 = window.loadKoreanHolidays || loadKoreanHolidays;
+  window.loadKoreanHolidays = async function () {
+    const visibleYear = state.currentDate.getFullYear();
+    loadHolidayCache();
+    normalizeEntireHolidayMapV8();
+    applyFixedAndLunarOverridesV8(visibleYear);
+
+    try {
+      await previousLoadKoreanHolidaysV8();
+    } catch (err) {
+      console.warn('기존 공휴일 로드 오류, 내장 보정값을 유지합니다.', err);
+    }
+
+    normalizeEntireHolidayMapV8();
+    applyFixedAndLunarOverridesV8(visibleYear);
+    try {
+      localStorage.setItem(HOLIDAY_CACHE_KEY, JSON.stringify({
+        updatedAt: new Date().toISOString(),
+        version: HOLIDAY_PATCH_VERSION_V8,
+        data: krHolidayMap
+      }));
+    } catch {}
+    renderCalendar();
+  };
+  loadKoreanHolidays = window.loadKoreanHolidays;
+
+  window.getHolidaysForDate = function (dateStr) {
+    return normalizeHolidayValueV8((krHolidayMap || {})[dateStr]);
+  };
+  getHolidaysForDate = window.getHolidaysForDate;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+      loadHolidayCache();
+      normalizeEntireHolidayMapV8();
+      applyFixedAndLunarOverridesV8(state.currentDate.getFullYear());
+      if (typeof renderCalendar === 'function') renderCalendar();
+      loadKoreanHolidays();
+    }, 80);
+  });
+})();
